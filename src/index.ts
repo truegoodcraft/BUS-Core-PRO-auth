@@ -21,6 +21,12 @@ const app = new Hono<{ Bindings: Env }>();
 const VALID_STATUSES = new Set(["active", "trialing"]);
 let cachedEntitlementPrivateKey: CryptoKey | null = null;
 let cachedEntitlementPublicKey: CryptoKey | null = null;
+  DB: D1Database;
+};
+
+const app = new Hono<{ Bindings: Env }>();
+
+const VALID_STATUSES = new Set(["active", "trialing"]);
 
 const parseEligiblePriceIds = (env: Env): string[] => {
   return (env.ELIGIBLE_PRICE_IDS ?? "")
@@ -221,6 +227,7 @@ app.get("/health", (c) => {
     ok: true,
     service: "bus-auth",
     version: "0.3.0",
+    version: "0.2.0",
   });
 });
 
