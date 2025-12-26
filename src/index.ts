@@ -173,22 +173,34 @@ app.get("/admin/health/detailed", (c) => {
 
 // Admin-only DB bootstrap
 app.post("/admin/db/bootstrap", async (c) => {
-  await c.env.DB.exec(`CREATE TABLE IF NOT EXISTS entitlements (
-    email TEXT PRIMARY KEY,
-    stripe_customer_id TEXT,
-    stripe_subscription_id TEXT,
-    status TEXT,
-    price_id TEXT,
-    current_period_end INTEGER,
-    updated_at INTEGER
-  );`);
-  await c.env.DB.exec(
-    "CREATE INDEX IF NOT EXISTS idx_entitlements_customer ON entitlements(stripe_customer_id);"
-  );
-  await c.env.DB.exec(
-    "CREATE INDEX IF NOT EXISTS idx_entitlements_subscription ON entitlements(stripe_subscription_id);"
-  );
-  return c.json({ ok: true });
+  try {
+    await c.env.DB.prepare(`CREATE TABLE IF NOT EXISTS entitlements (
+      email TEXT PRIMARY KEY,
+      stripe_customer_id TEXT,
+      stripe_subscription_id TEXT,
+      status TEXT,
+      price_id TEXT,
+      current_period_end INTEGER,
+      updated_at INTEGER
+    );`).run();
+    await c.env.DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_entitlements_customer ON entitlements(stripe_customer_id);"
+    ).run();
+    await c.env.DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_entitlements_subscription ON entitlements(stripe_subscription_id);"
+    ).run();
+    return c.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(
+      JSON.stringify({
+        at: new Date().toISOString(),
+        tag: "db_bootstrap_error",
+        message,
+      })
+    );
+    return c.json({ ok: false, error: "bootstrap_failed" }, 500);
+  }
 });
 
 // Create a Stripe Checkout Session (public)
