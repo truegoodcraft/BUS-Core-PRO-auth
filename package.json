@@ -1,0 +1,16 @@
+{
+  "name": "bus-auth",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "lint": "node -e \"console.log('lint placeholder: OK')\""
+  },
+  "dependencies": {
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.54.0"
+  }
+}

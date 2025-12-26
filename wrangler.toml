@@ -1,0 +1,7 @@
+name = "bus-auth"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+workers_dev = true
+
+[vars]
+ADMIN_IP_ALLOWLIST = "142.90.207.149"
