@@ -64,3 +64,25 @@ Use a rule that matches `/admin/*` paths. Example expression:
 ```
 (http.request.uri.path contains "/admin/")
 ```
+
+## Entitlement Tokens (Ed25519)
+
+Entitlement tokens let clients cache proof of eligibility for offline verification with a **7-day grace period** after subscription ends. Stripe + D1 remain the source of truth; tokens are derived outputs only.
+
+### Required Cloudflare config
+
+- Secret: `ENTITLEMENT_PRIVATE_KEY` (Ed25519 PKCS8 PEM, contains `BEGIN PRIVATE KEY`)
+- Var: `ENTITLEMENT_PUBLIC_KEY` (Ed25519 SPKI PEM, contains `BEGIN PUBLIC KEY`)
+- Optional vars:
+  - `ENTITLEMENT_GRACE_SECONDS`
+  - `ENTITLEMENT_MAX_TTL_SECONDS`
+
+### Endpoints
+
+- `POST /entitlement/token` with JSON `{ "email": "user@example.com" }`
+- `GET /.well-known/entitlement-public-key` to fetch the public key for clients
+
+### Security notes
+
+- The private key never lives in git or on the client.
+- Clients verify the token signature and `exp` locally.
