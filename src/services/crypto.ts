@@ -15,6 +15,23 @@ const base64urlEncodeString = (value: string): string => {
   return base64urlEncode(utf8Encode(value));
 };
 
+const base64urlDecodeToBytes = (value: string): Uint8Array => {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
+  const base64 = `${normalized}${padding}`;
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+const base64urlDecodeToString = (value: string): string => {
+  const bytes = base64urlDecodeToBytes(value);
+  return new TextDecoder().decode(bytes);
+};
+
 const pemToDer = (pem: string): ArrayBuffer => {
   const stripped = pem
     .replace(/-----BEGIN [^-]+-----/g, "")
@@ -88,4 +105,55 @@ export const signIdentityToken = async (
 
   const signatureEncoded = base64urlEncode(new Uint8Array(signature));
   return `${signingInput}.${signatureEncoded}`;
+};
+
+export const verifyIdentityToken = async (
+  token: string,
+  publicKeyPem: string
+): Promise<string | null> => {
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return null;
+  }
+  const [headerEncoded, bodyEncoded, signatureEncoded] = parts;
+  let body: { sub?: string; iss?: string; exp?: number };
+  try {
+    body = JSON.parse(base64urlDecodeToString(bodyEncoded)) as {
+      sub?: string;
+      iss?: string;
+      exp?: number;
+    };
+  } catch {
+    return null;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (!body.exp || now > body.exp) {
+    return null;
+  }
+  if (body.iss !== "auth.buscore.ca") {
+    return null;
+  }
+
+  const signingInput = `${headerEncoded}.${bodyEncoded}`;
+  const signatureBytes = base64urlDecodeToBytes(signatureEncoded);
+  const publicKey = await crypto.subtle.importKey(
+    "spki",
+    pemToDer(publicKeyPem),
+    { name: "Ed25519" },
+    true,
+    ["verify"]
+  );
+
+  const valid = await crypto.subtle.verify(
+    "Ed25519",
+    publicKey,
+    signatureBytes,
+    utf8Encode(signingInput)
+  );
+
+  if (!valid || !body.sub) {
+    return null;
+  }
+  return body.sub;
 };
