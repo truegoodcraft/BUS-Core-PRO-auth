@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import Stripe from "stripe";
+import { app as authRouter } from "./routes/auth";
 
-type Env = {
+export type Env = {
   ADMIN_API_KEY: string;
   ADMIN_IP_ALLOWLIST: string; // comma-separated IPv4 list, e.g. "142.90.207.149"
   STRIPE_SECRET_KEY: string;
@@ -13,20 +14,21 @@ type Env = {
   ENTITLEMENT_PUBLIC_KEY: string;
   ENTITLEMENT_GRACE_SECONDS?: string;
   ENTITLEMENT_MAX_TTL_SECONDS?: string;
+  IDENTITY_PRIVATE_KEY: string;
+  IDENTITY_PUBLIC_KEY: string;
+  RESEND_API_KEY: string;
+  MAGIC_LINK_TTL: string;
+  EMAIL_FROM: string;
+  AUTH_KV: KVNamespace;
   DB: D1Database;
 };
 
 const app = new Hono<{ Bindings: Env }>();
+app.route("/auth", authRouter);
 
 const VALID_STATUSES = new Set(["active", "trialing"]);
 let cachedEntitlementPrivateKey: CryptoKey | null = null;
 let cachedEntitlementPublicKey: CryptoKey | null = null;
-  DB: D1Database;
-};
-
-const app = new Hono<{ Bindings: Env }>();
-
-const VALID_STATUSES = new Set(["active", "trialing"]);
 
 const parseEligiblePriceIds = (env: Env): string[] => {
   return (env.ELIGIBLE_PRICE_IDS ?? "")
