@@ -9,14 +9,6 @@ ELIGIBLE_PRICE_IDS = "price_1SifxXBAvVMaiDTdz1QF6BM1"
 CHECKOUT_SUCCESS_URL = "https://buscore.ca/success"
 CHECKOUT_CANCEL_URL = "https://buscore.ca/cancel"
 
-[[d1_databases]]
-binding = "DB"
-database_name = "bus-auth-db"
-# Keep your custom domain mapping so deploys don't wipe it again
-routes = [
-  { pattern = "auth.buscore.ca/*", zone_name = "buscore.ca" }
-]
-
 # Keep logs enabled so you can debug in Cloudflare dashboard
 [observability.logs]
 enabled = true
@@ -25,3 +17,7 @@ enabled = true
 binding = "DB"
 database_name = "bus-auth-db"
 database_id = "c4120c73-2d08-4e87-8e4c-e402cfbb4f05"
+
+routes = [
+  { pattern = "auth.buscore.ca/*", zone_name = "buscore.ca" }
+]
