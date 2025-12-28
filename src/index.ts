@@ -1,14 +1,15 @@
 import { Hono } from "hono";
 import Stripe from "stripe";
-import { verifyIdentityToken } from "./services/crypto";
 import { app as authRouter } from "./routes/auth";
+import { verifyIdentityToken } from "./services/crypto";
 
 export type Env = {
   ADMIN_API_KEY: string;
-  ADMIN_IP_ALLOWLIST: string; // comma-separated IPv4 list, e.g. "142.90.207.149"
+  ADMIN_IP_ALLOWLIST: string;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   ELIGIBLE_PRICE_IDS: string;
+  STRIPE_PRICE_DEFAULT?: string;
   CHECKOUT_SUCCESS_URL: string;
   CHECKOUT_CANCEL_URL: string;
   ENTITLEMENT_PRIVATE_KEY: string;
@@ -29,7 +30,6 @@ app.route("/auth", authRouter);
 
 const VALID_STATUSES = new Set(["active", "trialing"]);
 let cachedEntitlementPrivateKey: CryptoKey | null = null;
-let cachedEntitlementPublicKey: CryptoKey | null = null;
 
 const parseEligiblePriceIds = (env: Env): string[] => {
   return (env.ELIGIBLE_PRICE_IDS ?? "")
@@ -69,11 +69,8 @@ const pemToDer = (pem: string): ArrayBuffer => {
 };
 
 const importEntitlementPrivateKey = async (env: Env): Promise<CryptoKey> => {
-  if (cachedEntitlementPrivateKey) {
-    return cachedEntitlementPrivateKey;
-  }
+  if (cachedEntitlementPrivateKey) return cachedEntitlementPrivateKey;
   const der = pemToDer(env.ENTITLEMENT_PRIVATE_KEY);
-  // Ed25519 private key import for signing tokens.
   cachedEntitlementPrivateKey = await crypto.subtle.importKey(
     "pkcs8",
     der,
@@ -82,29 +79,6 @@ const importEntitlementPrivateKey = async (env: Env): Promise<CryptoKey> => {
     ["sign"]
   );
   return cachedEntitlementPrivateKey;
-};
-
-const importEntitlementPublicKey = async (env: Env): Promise<CryptoKey> => {
-  if (cachedEntitlementPublicKey) {
-    return cachedEntitlementPublicKey;
-  }
-  const der = pemToDer(env.ENTITLEMENT_PUBLIC_KEY);
-  // Ed25519 public key import for client verification.
-  cachedEntitlementPublicKey = await crypto.subtle.importKey(
-    "spki",
-    der,
-    { name: "Ed25519" },
-    true,
-    ["verify"]
-  );
-  return cachedEntitlementPublicKey;
-};
-
-const isValidEmail = (email: string): boolean => {
-  if (!email || email.length > 254) {
-    return false;
-  }
-  return email.includes("@");
 };
 
 const getStripe = (env: Env) => {
@@ -125,13 +99,7 @@ const upsertEntitlement = async (env: Env, data: {
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
     `INSERT INTO entitlements (
-      email,
-      stripe_customer_id,
-      stripe_subscription_id,
-      status,
-      price_id,
-      current_period_end,
-      updated_at
+      email, stripe_customer_id, stripe_subscription_id, status, price_id, current_period_end, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(email) DO UPDATE SET
       stripe_customer_id = excluded.stripe_customer_id,
@@ -141,43 +109,21 @@ const upsertEntitlement = async (env: Env, data: {
       current_period_end = excluded.current_period_end,
       updated_at = excluded.updated_at`
   )
-    .bind(
-      data.email,
-      data.stripeCustomerId,
-      data.stripeSubscriptionId,
-      data.status,
-      data.priceId,
-      data.currentPeriodEnd,
-      now
-    )
+    .bind(data.email, data.stripeCustomerId, data.stripeSubscriptionId, data.status, data.priceId, data.currentPeriodEnd, now)
     .run();
 };
 
-// ─────────────────────────────────────────────────────────────
-// Request ID + Structured Logging Middleware
-// ─────────────────────────────────────────────────────────────
+// Middleware
 app.use("*", async (c, next) => {
   const start = Date.now();
-
-  let reqId = (c.req.header("x-request-id") ?? "").trim();
-  if (!reqId) {
-    if (typeof crypto !== "undefined" && crypto.randomUUID) {
-      reqId = crypto.randomUUID();
-    } else {
-      reqId = `${Date.now()}-${Math.random()}`;
-    }
-  }
-
+  let reqId = (c.req.header("x-request-id") ?? "").trim() || crypto.randomUUID();
   c.header("x-request-id", reqId);
-
   try {
     await next();
   } finally {
     const ms = Date.now() - start;
     const ip = c.req.header("CF-Connecting-IP") || "unknown";
-    const ua = c.req.header("User-Agent") || "unknown";
-
-    const logData = {
+    console.log(JSON.stringify({
       at: new Date().toISOString(),
       req_id: reqId,
       method: c.req.method,
@@ -185,71 +131,22 @@ app.use("*", async (c, next) => {
       status: c.res.status,
       ms,
       ip,
-      ua,
-    };
-
-    // SECURITY: never log Authorization headers or secrets
-    console.log(JSON.stringify(logData));
+    }));
   }
 });
 
-// ─────────────────────────────────────────────────────────────
-// Admin Protection Middleware
-// ─────────────────────────────────────────────────────────────
 app.use("/admin/*", async (c, next) => {
-  // A) IP allowlist check
   const ip = (c.req.header("CF-Connecting-IP") ?? "").trim();
-  const allowlistStr = c.env.ADMIN_IP_ALLOWLIST || "";
-  const allowlist = allowlistStr
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s !== "");
-
-  if (!ip || !allowlist.includes(ip)) {
-    return c.json({ ok: false, error: "forbidden" }, 403);
-  }
-
-  // B) API key check
+  const allowlist = (c.env.ADMIN_IP_ALLOWLIST || "").split(",").map(s => s.trim());
+  if (!ip || !allowlist.includes(ip)) return c.json({ ok: false, error: "forbidden" }, 403);
   const authHeader = c.req.header("Authorization") ?? "";
-  const expectedKey = c.env.ADMIN_API_KEY;
-
-  if (!expectedKey || authHeader !== `Bearer ${expectedKey}`) {
-    return c.json({ ok: false, error: "unauthorized" }, 401);
-  }
-
+  if (!c.env.ADMIN_API_KEY || authHeader !== `Bearer ${c.env.ADMIN_API_KEY}`) return c.json({ ok: false, error: "unauthorized" }, 401);
   await next();
 });
 
-// ─────────────────────────────────────────────────────────────
 // Routes
-// ─────────────────────────────────────────────────────────────
+app.get("/health", (c) => c.json({ ok: true, service: "bus-auth", version: "0.3.0" }));
 
-// Public health check
-app.get("/health", (c) => {
-  return c.json({
-    ok: true,
-    service: "bus-auth",
-    version: "0.3.0",
-    version: "0.2.0",
-  });
-});
-
-// Admin health (read-only)
-app.get("/admin/health/detailed", (c) => {
-  const ip = c.req.header("CF-Connecting-IP") || "unknown";
-  const hasAdminKey = !!(c.env.ADMIN_API_KEY && c.env.ADMIN_API_KEY.length > 0);
-
-  return c.json({
-    ok: true,
-    admin: true,
-    ip,
-    has_admin_key: hasAdminKey,
-    allowlist: c.env.ADMIN_IP_ALLOWLIST,
-    version: "0.3.0",
-  });
-});
-
-// Admin-only DB bootstrap
 app.post("/admin/db/bootstrap", async (c) => {
   try {
     await c.env.DB.prepare(`CREATE TABLE IF NOT EXISTS entitlements (
@@ -259,298 +156,140 @@ app.post("/admin/db/bootstrap", async (c) => {
       status TEXT,
       price_id TEXT,
       current_period_end INTEGER,
-      updated_at INTEGER
+      updated_at INTEGER,
+      last_ip TEXT
     );`).run();
-    await c.env.DB.prepare(
-      "CREATE INDEX IF NOT EXISTS idx_entitlements_customer ON entitlements(stripe_customer_id);"
-    ).run();
-    await c.env.DB.prepare(
-      "CREATE INDEX IF NOT EXISTS idx_entitlements_subscription ON entitlements(stripe_subscription_id);"
-    ).run();
     return c.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.log(
-      JSON.stringify({
-        at: new Date().toISOString(),
-        tag: "db_bootstrap_error",
-        message,
-      })
-    );
     return c.json({ ok: false, error: "bootstrap_failed" }, 500);
   }
 });
 
-// Admin-only entitlement key status
-app.get("/admin/entitlement/keys", (c) => {
-  const hasPrivateKey = !!(c.env.ENTITLEMENT_PRIVATE_KEY ?? "").trim();
-  const hasPublicKey = !!(c.env.ENTITLEMENT_PUBLIC_KEY ?? "").trim();
-  return c.json({ ok: true, has_private_key: hasPrivateKey, has_public_key: hasPublicKey });
-});
-
-// Create a Stripe Checkout Session (public)
 app.post("/checkout/session", async (c) => {
-  const body = await c.req.json<{ email?: string }>().catch(() => ({}));
-  const email = (body.email ?? "").trim();
-  if (!isValidEmail(email)) {
-    return c.json({ ok: false, error: "bad_request" }, 400);
-  }
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) return c.json({ ok: false, error: "missing_bearer" }, 401);
+  const token = authHeader.slice(7).trim();
+  const email = await verifyIdentityToken(token, c.env.IDENTITY_PUBLIC_KEY);
+  if (!email) return c.json({ ok: false, error: "invalid_token" }, 401);
 
-  const priceIds = parseEligiblePriceIds(c.env);
-  const firstPriceId = priceIds[0];
-  if (!firstPriceId) {
-    return c.json({ ok: false, error: "stripe_error" }, 500);
-  }
+  if (!c.env.STRIPE_SECRET_KEY || !c.env.CHECKOUT_SUCCESS_URL || !c.env.CHECKOUT_CANCEL_URL) 
+    return c.json({ ok: false, error: "env_misconfigured" }, 500);
 
-  const stripe = getStripe(c.env);
+  let body: any = {};
+  try { body = await c.req.json(); } catch (e) {}
+  const priceId = body.price_id || c.env.STRIPE_PRICE_DEFAULT;
+  const eligiblePrices = parseEligiblePriceIds(c.env);
+  
+  if (!priceId || !eligiblePrices.includes(priceId)) return c.json({ ok: false, error: "invalid_price_id" }, 400);
 
   try {
+    const stripe = getStripe(c.env);
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer_email: email,
-      line_items: [{ price: firstPriceId, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       success_url: c.env.CHECKOUT_SUCCESS_URL,
       cancel_url: c.env.CHECKOUT_CANCEL_URL,
-      allow_promotion_codes: false,
+      metadata: { email }
     });
-
     return c.json({ ok: true, url: session.url });
-  } catch {
-    return c.json({ ok: false, error: "stripe_error" }, 500);
+  } catch (err: any) {
+    return c.json({ ok: false, error: "stripe_error", details: err.message }, 400);
   }
 });
 
-// Stripe webhook (public)
 app.post("/stripe/webhook", async (c) => {
   const signature = c.req.header("Stripe-Signature");
-  if (!signature) {
-    return c.json({ ok: false, error: "bad_signature" }, 400);
-  }
-
+  if (!signature) return c.json({ ok: false, error: "bad_signature" }, 400);
   const payload = await c.req.text();
   const stripe = getStripe(c.env);
   let event: Stripe.Event;
-
   try {
-    event = await stripe.webhooks.constructEventAsync(
-      payload,
-      signature,
-      c.env.STRIPE_WEBHOOK_SECRET
-    );
+    event = await stripe.webhooks.constructEventAsync(payload, signature, c.env.STRIPE_WEBHOOK_SECRET);
   } catch {
     return c.json({ ok: false, error: "bad_signature" }, 400);
   }
 
   const handleSubscription = async (subscription: Stripe.Subscription) => {
-    const customerId =
-      typeof subscription.customer === "string" ? subscription.customer : null;
-    const subscriptionId = subscription.id;
-    const status = subscription.status ?? null;
-    const currentPeriodEnd = subscription.current_period_end ?? null;
-    const priceId = subscription.items?.data?.[0]?.price?.id ?? null;
-    const customerEmail =
-      (subscription as Stripe.Subscription & { customer_email?: string })
-        .customer_email ?? null;
-    const priceAllowlist = new Set(parseEligiblePriceIds(c.env));
-    const eligible =
-      !!status &&
-      VALID_STATUSES.has(status) &&
-      !!priceId &&
-      priceAllowlist.has(priceId);
-
-    let email = customerEmail ?? null;
+    const customerId = typeof subscription.customer === "string" ? subscription.customer : null;
+    let email = (subscription as any).customer_email || null;
     if (!email && customerId) {
       const customer = await stripe.customers.retrieve(customerId);
-      if (!customer.deleted && customer.email) {
-        email = customer.email;
-      }
+      if (!customer.deleted && (customer as Stripe.Customer).email) email = (customer as Stripe.Customer).email;
     }
-
-    if (!email) {
-      console.log(
-        JSON.stringify({
-          tag: "stripe_webhook_missing_email",
-          event_id: event.id,
-          customer_id: customerId,
-          subscription_id: subscriptionId,
-          eligible,
-        })
-      );
-      return;
-    }
+    if (!email) return;
 
     await upsertEntitlement(c.env, {
       email,
       stripeCustomerId: customerId,
-      stripeSubscriptionId: subscriptionId,
-      status,
-      priceId,
-      currentPeriodEnd,
+      stripeSubscriptionId: subscription.id,
+      status: subscription.status,
+      priceId: subscription.items.data[0]?.price.id,
+      currentPeriodEnd: subscription.current_period_end,
     });
   };
 
-  try {
-    if (
-      event.type === "customer.subscription.created" ||
-      event.type === "customer.subscription.updated" ||
-      event.type === "customer.subscription.deleted"
-    ) {
-      const subscription = event.data.object as Stripe.Subscription;
-      await handleSubscription(subscription);
-    } else if (event.type === "checkout.session.completed") {
-      const session = event.data.object as Stripe.Checkout.Session;
-      if (typeof session.subscription === "string") {
-        const subscription = await stripe.subscriptions.retrieve(
-          session.subscription
-        );
-        await handleSubscription(subscription);
-      }
-    }
-  } catch {
-    return c.json({ ok: false, error: "stripe_error" }, 500);
+  if (["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"].includes(event.type)) {
+    await handleSubscription(event.data.object as Stripe.Subscription);
   }
-
   return c.json({ ok: true });
 });
 
-// Entitlement lookup (public)
+// --- UPDATED ENTITLEMENT WITH HEARTBEAT ---
 app.post("/entitlement", async (c) => {
   const authHeader = c.req.header("Authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) {
-    return c.json({ ok: false, error: "unauthorized" }, 401);
-  }
-  const token = authHeader.slice("Bearer ".length).trim();
+  if (!authHeader.startsWith("Bearer ")) return c.json({ ok: false, error: "unauthorized" }, 401);
+  const token = authHeader.slice(7).trim();
   const email = await verifyIdentityToken(token, c.env.IDENTITY_PUBLIC_KEY);
-  if (!email) {
-    return c.json({ ok: false, error: "unauthorized" }, 401);
-  }
+  if (!email) return c.json({ ok: false, error: "unauthorized" }, 401);
 
-  const row = await c.env.DB.prepare(
-    "SELECT email, status, price_id, current_period_end FROM entitlements WHERE email = ?;"
-  )
-    .bind(email)
-    .first<{
-      email: string;
-      status: string | null;
-      price_id: string | null;
-      current_period_end: number | null;
-    }>();
+  // Heartbeat Update
+  const ip = c.req.header("CF-Connecting-IP") || "unknown";
+  const now = Math.floor(Date.now() / 1000);
+  await c.env.DB.prepare("UPDATE entitlements SET updated_at = ?, last_ip = ? WHERE email = ?;")
+    .bind(now, ip, email).run();
+
+  const row = await c.env.DB.prepare("SELECT status, price_id, current_period_end FROM entitlements WHERE email = ?;")
+    .bind(email).first<{ status: string | null; price_id: string | null; current_period_end: number | null; }>();
 
   const priceAllowlist = new Set(parseEligiblePriceIds(c.env));
-  const isEligible =
-    !!row &&
-    !!row.status &&
-    VALID_STATUSES.has(row.status) &&
-    !!row.price_id &&
-    priceAllowlist.has(row.price_id);
-
-  return c.json({
-    ok: true,
-    email,
-    eligible: isEligible,
-    status: row?.status ?? null,
-    price_id: row?.price_id ?? null,
-    current_period_end: row?.current_period_end ?? null,
-  });
+  const isEligible = !!row && VALID_STATUSES.has(row.status || "") && priceAllowlist.has(row.price_id || "");
+  
+  return c.json({ ok: true, email, eligible: isEligible, status: row?.status ?? null, price_id: row?.price_id ?? null, current_period_end: row?.current_period_end ?? null });
 });
 
-// Entitlement token (public)
 app.post("/entitlement/token", async (c) => {
   const authHeader = c.req.header("Authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) {
-    return c.json({ ok: false, error: "unauthorized" }, 401);
-  }
-  const token = authHeader.slice("Bearer ".length).trim();
+  if (!authHeader.startsWith("Bearer ")) return c.json({ ok: false, error: "unauthorized" }, 401);
+  const token = authHeader.slice(7).trim();
   const email = await verifyIdentityToken(token, c.env.IDENTITY_PUBLIC_KEY);
-  if (!email) {
-    return c.json({ ok: false, error: "unauthorized" }, 401);
-  }
+  if (!email) return c.json({ ok: false, error: "unauthorized" }, 401);
 
-  if (!c.env.ENTITLEMENT_PRIVATE_KEY || !c.env.ENTITLEMENT_PUBLIC_KEY) {
-    return c.json({ ok: false, error: "misconfigured" }, 500);
-  }
-
-  const row = await c.env.DB.prepare(
-    "SELECT email, status, price_id, current_period_end FROM entitlements WHERE email = ?;"
-  )
-    .bind(email)
-    .first<{
-      email: string;
-      status: string | null;
-      price_id: string | null;
-      current_period_end: number | null;
-    }>();
+  const row = await c.env.DB.prepare("SELECT status, price_id, current_period_end FROM entitlements WHERE email = ?;")
+    .bind(email).first<{ status: string | null; price_id: string | null; current_period_end: number | null; }>();
 
   const priceAllowlist = new Set(parseEligiblePriceIds(c.env));
-  const eligible =
-    !!row &&
-    !!row.status &&
-    VALID_STATUSES.has(row.status) &&
-    !!row.price_id &&
-    priceAllowlist.has(row.price_id);
-
+  const eligible = !!row && VALID_STATUSES.has(row.status || "") && priceAllowlist.has(row.price_id || "");
+  
   const now = Math.floor(Date.now() / 1000);
-  const graceParsed = Number.parseInt(
-    c.env.ENTITLEMENT_GRACE_SECONDS ?? "604800",
-    10
-  );
-  const maxTtlParsed = Number.parseInt(
-    c.env.ENTITLEMENT_MAX_TTL_SECONDS ?? "2592000",
-    10
-  );
-  const graceSeconds = Number.isFinite(graceParsed) ? graceParsed : 604800;
-  const maxTtlSeconds = Number.isFinite(maxTtlParsed) ? maxTtlParsed : 2592000;
-
+  const grace = Number.parseInt(c.env.ENTITLEMENT_GRACE_SECONDS ?? "604800");
+  const maxTtl = Number.parseInt(c.env.ENTITLEMENT_MAX_TTL_SECONDS ?? "2592000");
   let exp = now + 600;
-  if (eligible && typeof row?.current_period_end === "number") {
-    exp = Math.min(now + maxTtlSeconds, row.current_period_end + graceSeconds);
-  }
+  if (eligible && row?.current_period_end) exp = Math.min(now + maxTtl, row.current_period_end + grace);
 
-  const payload = {
-    v: 1,
-    sub: email,
-    iat: now,
-    exp,
-    eligible,
-    price_id: row?.price_id ?? null,
-    status: row?.status ?? null,
-    current_period_end: row?.current_period_end ?? null,
-  };
+  const payload = { v: 1, sub: email, iat: now, exp, eligible, price_id: row?.price_id ?? null, status: row?.status ?? null, current_period_end: row?.current_period_end ?? null };
+  const privateKey = await importEntitlementPrivateKey(c.env);
+  const payloadB64 = base64urlEncodeString(JSON.stringify(payload));
+  const signingInput = `v1.${payloadB64}`;
+  const signature = await crypto.subtle.sign({ name: "Ed25519" }, privateKey, utf8Encode(signingInput));
+  const entitlementToken = `v1.${payloadB64}.${base64urlEncode(new Uint8Array(signature))}`;
 
-  let token: string;
-  try {
-    const privateKey = await importEntitlementPrivateKey(c.env);
-    const payloadB64 = base64urlEncodeString(JSON.stringify(payload));
-    const signingInput = `v1.${payloadB64}`;
-    const signature = await crypto.subtle.sign(
-      { name: "Ed25519" },
-      privateKey,
-      utf8Encode(signingInput)
-    );
-    const signatureB64 = base64urlEncode(new Uint8Array(signature));
-    token = `v1.${payloadB64}.${signatureB64}`;
-  } catch {
-    return c.json({ ok: false, error: "misconfigured" }, 500);
-  }
-
-  return c.json({
-    ok: true,
-    email,
-    eligible,
-    status: row?.status ?? null,
-    price_id: row?.price_id ?? null,
-    current_period_end: row?.current_period_end ?? null,
-    token,
-  });
+  return c.json({ ok: true, email, eligible, token: entitlementToken });
 });
 
-// Entitlement public key (public)
 app.get("/.well-known/entitlement-public-key", (c) => {
-  const publicKey = c.env.ENTITLEMENT_PUBLIC_KEY;
-  if (!publicKey) {
-    return c.json({ ok: false, error: "misconfigured" }, 500);
-  }
-  return c.json({ ok: true, public_key_pem: publicKey });
+  if (!c.env.ENTITLEMENT_PUBLIC_KEY) return c.json({ ok: false, error: "misconfigured" }, 500);
+  return c.json({ ok: true, public_key_pem: c.env.ENTITLEMENT_PUBLIC_KEY });
 });
 
 export default app;
