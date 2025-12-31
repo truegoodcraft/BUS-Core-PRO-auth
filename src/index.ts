@@ -19,6 +19,7 @@ export type Env = {
   IDENTITY_PRIVATE_KEY: string;
   IDENTITY_PUBLIC_KEY: string;
   ENVIRONMENT?: string;
+  WORKER_ENV?: string;
   RESEND_API_KEY: string;
   STATS_KEY: string;
   MAGIC_LINK_TTL: string;

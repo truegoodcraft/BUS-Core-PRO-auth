@@ -10,7 +10,9 @@ app.post("/magic/start", async (c) => {
   const body = await c.req.json<{ email?: string }>().catch(() => ({}));
   const rawEmail = typeof body.email === "string" ? body.email : "";
   const email = rawEmail.trim().toLowerCase();
-  const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+  const forwardedFor = (c.req.header("x-forwarded-for") ?? "").split(",")[0]?.trim();
+  const cfIp = c.req.header("CF-Connecting-IP");
+  const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   const ipAllowed = await checkRateLimit(
@@ -50,7 +52,7 @@ app.post("/magic/start", async (c) => {
 
   await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
 
-  if (c.env.ENVIRONMENT === "dev") {
+  if (c.env.ENVIRONMENT === "dev" || c.env.WORKER_ENV === "development") {
     console.log({ event: "magic_start_dev", email, code });
   }
 
