@@ -279,8 +279,11 @@ app.post("/entitlement/token", async (c) => {
   return c.json({ ok: true, email, eligible, token: entitlementToken });
 });
 
+app.get("/.well-known/identity-public-key", (c) => {
+  return c.json({ ok: true, public_key_pem: c.env.IDENTITY_PUBLIC_KEY });
+});
+
 app.get("/.well-known/entitlement-public-key", (c) => {
-  if (!c.env.ENTITLEMENT_PUBLIC_KEY) return c.json({ ok: false, error: "misconfigured" }, 500);
   return c.json({ ok: true, public_key_pem: c.env.ENTITLEMENT_PUBLIC_KEY });
 });
 
