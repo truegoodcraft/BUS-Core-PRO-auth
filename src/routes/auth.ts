@@ -29,7 +29,7 @@ app.post("/magic/start", async (c) => {
   await c.env.DB.prepare(
     `INSERT OR REPLACE INTO auth_magic_links (
       email,
-      token_hash,
+      code_hash,
       expires_at,
       created_at,
       ip_address
@@ -50,17 +50,17 @@ app.post("/magic/verify", async (c) => {
   const now = Math.floor(Date.now() / 1000);
 
   const record = await c.env.DB.prepare(
-    "SELECT token_hash, expires_at FROM auth_magic_links WHERE email = ?"
+    "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ?"
   )
     .bind(email)
-    .first<{ token_hash: string; expires_at: number }>();
+    .first<{ code_hash: string; expires_at: number }>();
 
   if (!record || record.expires_at < now) {
     return c.json({ error: "Invalid or expired" }, 401);
   }
 
   const tokenHash = await hashString(code);
-  if (tokenHash !== record.token_hash) {
+  if (tokenHash !== record.code_hash) {
     return c.json({ error: "Invalid or expired" }, 401);
   }
 

@@ -1,12 +1,9 @@
--- Magic Link Challenges
 CREATE TABLE auth_magic_links (
-    email TEXT PRIMARY KEY,
-    token_hash TEXT NOT NULL,
-    expires_at INTEGER NOT NULL, -- Unix timestamp
-    created_at INTEGER NOT NULL, -- Unix timestamp
-    ip_address TEXT,
-    attempt_count INTEGER DEFAULT 0
+  email TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  ip_address TEXT
 );
 
--- Index for finding expired tokens
-CREATE INDEX idx_auth_magic_links_expires_at ON auth_magic_links(expires_at);
+CREATE INDEX idx_magic_expires ON auth_magic_links(expires_at);

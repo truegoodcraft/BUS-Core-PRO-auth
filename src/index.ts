@@ -100,8 +100,8 @@ const upsertEntitlement = async (env: Env, data: {
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
     `INSERT INTO entitlements (
-      email, stripe_customer_id, stripe_subscription_id, status, price_id, current_period_end, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      email, stripe_customer_id, stripe_subscription_id, status, price_id, current_period_end, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(email) DO UPDATE SET
       stripe_customer_id = excluded.stripe_customer_id,
       stripe_subscription_id = excluded.stripe_subscription_id,
@@ -110,7 +110,16 @@ const upsertEntitlement = async (env: Env, data: {
       current_period_end = excluded.current_period_end,
       updated_at = excluded.updated_at`
   )
-    .bind(data.email, data.stripeCustomerId, data.stripeSubscriptionId, data.status, data.priceId, data.currentPeriodEnd, now)
+    .bind(
+      data.email,
+      data.stripeCustomerId,
+      data.stripeSubscriptionId,
+      data.status,
+      data.priceId,
+      data.currentPeriodEnd,
+      now,
+      now
+    )
     .run();
 };
 
@@ -147,24 +156,6 @@ app.use("/admin/*", async (c, next) => {
 
 // Routes
 app.get("/health", (c) => c.json({ ok: true, service: "bus-auth", version: "0.1.0" }));
-
-app.post("/admin/db/bootstrap", async (c) => {
-  try {
-    await c.env.DB.prepare(`CREATE TABLE IF NOT EXISTS entitlements (
-      email TEXT PRIMARY KEY,
-      stripe_customer_id TEXT,
-      stripe_subscription_id TEXT,
-      status TEXT,
-      price_id TEXT,
-      current_period_end INTEGER,
-      updated_at INTEGER,
-      last_ip TEXT
-    );`).run();
-    return c.json({ ok: true });
-  } catch (error) {
-    return c.json({ ok: false, error: "bootstrap_failed" }, 500);
-  }
-});
 
 app.post("/checkout/session", async (c) => {
   const authHeader = c.req.header("Authorization") ?? "";
