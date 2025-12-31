@@ -91,6 +91,29 @@ const getStripe = (env: Env) => {
   });
 };
 
+const upsertEntitlementSot = async (
+  env: Env,
+  data: {
+    email: string;
+    status: string | null;
+    priceId: string | null;
+    currentPeriodEnd: number | null;
+  }
+) => {
+  await env.DB.prepare(
+    `INSERT INTO entitlements (
+      email, status, price_id, current_period_end, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+    ON CONFLICT(email) DO UPDATE SET
+      status = excluded.status,
+      price_id = excluded.price_id,
+      current_period_end = excluded.current_period_end,
+      updated_at = strftime('%s','now')`
+  )
+    .bind(data.email, data.status, data.priceId, data.currentPeriodEnd)
+    .run();
+};
+
 const upsertEntitlement = async (env: Env, data: {
   email: string;
   stripeCustomerId: string | null;
@@ -158,6 +181,48 @@ app.use("/admin/*", async (c, next) => {
 
 // Routes
 app.get("/health", (c) => c.json({ ok: true, service: "bus-auth", version: "0.1.0" }));
+
+app.post("/billing/create-checkout-session", async (c) => {
+  const body = await c.req.json<{ email?: string; price_id?: string }>().catch(() => ({}));
+  const rawEmail = typeof body.email === "string" ? body.email : "";
+  const email = rawEmail.trim().toLowerCase();
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  if (!isValidEmail) {
+    return c.json({ ok: false, error: "invalid_input" }, 400);
+  }
+
+  const eligiblePrices = parseEligiblePriceIds(c.env);
+  let priceId = typeof body.price_id === "string" ? body.price_id : "";
+  if (priceId && !eligiblePrices.includes(priceId)) {
+    return c.json({ ok: false, error: "price_not_allowed" }, 400);
+  }
+  if (!priceId) {
+    priceId = c.env.STRIPE_PRICE_DEFAULT ?? "";
+  }
+  if (!priceId || !eligiblePrices.includes(priceId)) {
+    return c.json({ ok: false, error: "price_not_allowed" }, 400);
+  }
+
+  if (c.env.ENVIRONMENT !== "prod") {
+    console.log(JSON.stringify({ event: "checkout_create_dev", email, priceId }));
+  }
+
+  try {
+    const stripe = getStripe(c.env);
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer_email: email,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: c.env.CHECKOUT_SUCCESS_URL,
+      cancel_url: c.env.CHECKOUT_CANCEL_URL,
+    });
+    return c.json({ ok: true, url: session.url });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    console.warn(JSON.stringify({ event: "checkout_create_error", msg: message }));
+    return c.json({ ok: false, error: "stripe_error" });
+  }
+});
 
 app.post("/checkout/session", async (c) => {
   const authHeader = c.req.header("Authorization") ?? "";
@@ -227,6 +292,106 @@ app.post("/stripe/webhook", async (c) => {
     await handleSubscription(event.data.object as Stripe.Subscription);
   }
   return c.json({ ok: true });
+});
+
+app.post("/billing/webhook", async (c) => {
+  const signature = c.req.header("Stripe-Signature");
+  if (!signature) return c.json({ ok: false, error: "bad_signature" }, 400);
+  const payload = await c.req.text();
+  const stripe = getStripe(c.env);
+  let event: Stripe.Event;
+  try {
+    event = await stripe.webhooks.constructEventAsync(payload, signature, c.env.STRIPE_WEBHOOK_SECRET);
+  } catch {
+    return c.json({ ok: false, error: "bad_signature" }, 400);
+  }
+
+  try {
+    const insertResult = await c.env.DB.prepare(
+      "INSERT OR IGNORE INTO webhook_events (id, created_at) VALUES (?, strftime('%s','now'))"
+    )
+      .bind(event.id)
+      .run();
+    const changes = insertResult.meta?.changes ?? 0;
+    if (changes === 0) {
+      return c.json({ ok: true });
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const email = session.customer_details?.email ?? session.customer_email ?? null;
+      const subscriptionId = typeof session.subscription === "string" ? session.subscription : null;
+      if (!email || !subscriptionId) {
+        return c.json({ ok: true });
+      }
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      const priceId = subscription.items.data[0]?.price.id ?? null;
+      const currentPeriodEnd = subscription.current_period_end ?? null;
+      await upsertEntitlementSot(c.env, {
+        email,
+        status: subscription.status,
+        priceId,
+        currentPeriodEnd,
+      });
+
+      if (c.env.ENVIRONMENT !== "prod") {
+        console.log(JSON.stringify({
+          event: "webhook_dev",
+          type: event.type,
+          email,
+          status: subscription.status,
+          price_id: priceId,
+        }));
+      }
+      return c.json({ ok: true });
+    }
+
+    if (
+      event.type === "customer.subscription.created" ||
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted"
+    ) {
+      const subscription = event.data.object as Stripe.Subscription;
+      const priceId = subscription.items.data[0]?.price.id ?? null;
+      const currentPeriodEnd = subscription.current_period_end ?? null;
+      const status = event.type === "customer.subscription.deleted" ? "canceled" : subscription.status;
+
+      let email = (subscription as any).customer_email ?? null;
+      if (!email && typeof subscription.customer === "string") {
+        const customer = await stripe.customers.retrieve(subscription.customer);
+        if (!customer.deleted && (customer as Stripe.Customer).email) {
+          email = (customer as Stripe.Customer).email;
+        }
+      }
+      if (!email) {
+        return c.json({ ok: true });
+      }
+
+      await upsertEntitlementSot(c.env, {
+        email,
+        status,
+        priceId,
+        currentPeriodEnd,
+      });
+
+      if (c.env.ENVIRONMENT !== "prod") {
+        console.log(JSON.stringify({
+          event: "webhook_dev",
+          type: event.type,
+          email,
+          status,
+          price_id: priceId,
+        }));
+      }
+      return c.json({ ok: true });
+    }
+
+    return c.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    console.warn(JSON.stringify({ event: "webhook_error", msg: message }));
+    return c.json({ ok: true });
+  }
 });
 
 // --- UPDATED ENTITLEMENT WITH HEARTBEAT ---
