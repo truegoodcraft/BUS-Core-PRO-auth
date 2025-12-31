@@ -14,8 +14,8 @@ export const sendMagicCode = async (
       body: JSON.stringify({
         from,
         to: [to],
-        subject: "Your BUS Core Login Code",
-        html: `<p>Your login code is: <strong>${code}</strong></p><p>Expires in 15 minutes.</p>`,
+        subject: "Your BUS Auth code",
+        html: `<p>Your BUS Auth code is: <strong>${code}</strong></p><p>This code expires in 15 minutes.</p>`,
       }),
     });
 
