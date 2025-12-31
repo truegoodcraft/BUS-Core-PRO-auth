@@ -19,9 +19,10 @@ export type Env = {
   IDENTITY_PRIVATE_KEY: string;
   IDENTITY_PUBLIC_KEY: string;
   RESEND_API_KEY: string;
+  STATS_KEY: string;
   MAGIC_LINK_TTL: string;
   EMAIL_FROM: string;
-  AUTH_KV: KVNamespace;
+  RATE_LIMITS: KVNamespace;
   DB: D1Database;
 };
 
@@ -145,7 +146,7 @@ app.use("/admin/*", async (c, next) => {
 });
 
 // Routes
-app.get("/health", (c) => c.json({ ok: true, service: "bus-auth", version: "0.3.0" }));
+app.get("/health", (c) => c.json({ ok: true, service: "bus-auth", version: "0.1.0" }));
 
 app.post("/admin/db/bootstrap", async (c) => {
   try {

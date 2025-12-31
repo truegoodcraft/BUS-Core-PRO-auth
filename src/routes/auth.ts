@@ -12,7 +12,7 @@ app.post("/magic/start", async (c) => {
   const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
 
   const allowed = await checkRateLimit(
-    c.env.AUTH_KV,
+    c.env.RATE_LIMITS,
     `ratelimit:ip:${ip}`,
     5,
     900

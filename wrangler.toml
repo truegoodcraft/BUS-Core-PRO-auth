@@ -18,6 +18,8 @@ MCowBQYDK2VwAyEA1vhCDACNL3gDVRYyeFTjEMdHMVfF12+yvnzVLld0q3s=
 -----END PUBLIC KEY-----
 """
 
+ENTITLEMENT_PUBLIC_KEY = ""
+
 # Keep logs enabled so you can debug in Cloudflare dashboard
 [observability.logs]
 enabled = true
@@ -32,5 +34,5 @@ routes = [
 ]
 
 [[kv_namespaces]]
-binding = "AUTH_KV"
+binding = "RATE_LIMITS"
 id = "eaeb742be3214279a15bb5d352ecb56c"
