@@ -1,5 +1,5 @@
--- Rebuild auth_magic_links to match SoT exactly, preserving rows and renaming token_hash -> code_hash.
-BEGIN IMMEDIATE;
+-- Transaction-free SoT rebuild of auth_magic_links (remote-safe).
+DROP TABLE IF EXISTS auth_magic_links_new;
 
 CREATE TABLE auth_magic_links_new (
   email TEXT PRIMARY KEY,
@@ -9,11 +9,11 @@ CREATE TABLE auth_magic_links_new (
   ip_address TEXT
 );
 
+-- Remote has token_hash + attempt_count; map token_hash -> code_hash, drop attempt_count.
 INSERT INTO auth_magic_links_new (email, code_hash, expires_at, created_at, ip_address)
 SELECT
   email,
-  -- token_hash → code_hash (fallback if already code_hash)
-  COALESCE(code_hash, token_hash),
+  token_hash,
   expires_at,
   created_at,
   ip_address
@@ -23,5 +23,3 @@ DROP TABLE auth_magic_links;
 ALTER TABLE auth_magic_links_new RENAME TO auth_magic_links;
 
 CREATE INDEX IF NOT EXISTS idx_magic_expires ON auth_magic_links(expires_at);
-
-COMMIT;
