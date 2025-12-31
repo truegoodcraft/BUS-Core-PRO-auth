@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import Stripe from "stripe";
 import { app as authRouter } from "./routes/auth";
+import { entitlementTokenHandler } from "./routes/entitlement";
 import { verifyIdentityToken } from "./services/crypto";
 
 export type Env = {
@@ -32,56 +33,12 @@ const app = new Hono<{ Bindings: Env }>();
 app.route("/auth", authRouter);
 
 const VALID_STATUSES = new Set(["active", "trialing"]);
-let cachedEntitlementPrivateKey: CryptoKey | null = null;
 
 const parseEligiblePriceIds = (env: Env): string[] => {
   return (env.ELIGIBLE_PRICE_IDS ?? "")
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
-};
-
-const utf8Encode = (value: string): Uint8Array => {
-  return new TextEncoder().encode(value);
-};
-
-const base64urlEncode = (bytes: Uint8Array): string => {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  const base64 = btoa(binary);
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-};
-
-const base64urlEncodeString = (value: string): string => {
-  return base64urlEncode(utf8Encode(value));
-};
-
-const pemToDer = (pem: string): ArrayBuffer => {
-  const stripped = pem
-    .replace(/-----BEGIN [^-]+-----/g, "")
-    .replace(/-----END [^-]+-----/g, "")
-    .replace(/\s+/g, "");
-  const binary = atob(stripped);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
-};
-
-const importEntitlementPrivateKey = async (env: Env): Promise<CryptoKey> => {
-  if (cachedEntitlementPrivateKey) return cachedEntitlementPrivateKey;
-  const der = pemToDer(env.ENTITLEMENT_PRIVATE_KEY);
-  cachedEntitlementPrivateKey = await crypto.subtle.importKey(
-    "pkcs8",
-    der,
-    { name: "Ed25519" },
-    false,
-    ["sign"]
-  );
-  return cachedEntitlementPrivateKey;
 };
 
 const getStripe = (env: Env) => {
@@ -417,34 +374,7 @@ app.post("/entitlement", async (c) => {
   return c.json({ ok: true, email, eligible: isEligible, status: row?.status ?? null, price_id: row?.price_id ?? null, current_period_end: row?.current_period_end ?? null });
 });
 
-app.post("/entitlement/token", async (c) => {
-  const authHeader = c.req.header("Authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) return c.json({ ok: false, error: "unauthorized" }, 401);
-  const token = authHeader.slice(7).trim();
-  const email = await verifyIdentityToken(token, c.env.IDENTITY_PUBLIC_KEY);
-  if (!email) return c.json({ ok: false, error: "unauthorized" }, 401);
-
-  const row = await c.env.DB.prepare("SELECT status, price_id, current_period_end FROM entitlements WHERE email = ?;")
-    .bind(email).first<{ status: string | null; price_id: string | null; current_period_end: number | null; }>();
-
-  const priceAllowlist = new Set(parseEligiblePriceIds(c.env));
-  const eligible = !!row && VALID_STATUSES.has(row.status || "") && priceAllowlist.has(row.price_id || "");
-  
-  const now = Math.floor(Date.now() / 1000);
-  const grace = Number.parseInt(c.env.ENTITLEMENT_GRACE_SECONDS ?? "604800");
-  const maxTtl = Number.parseInt(c.env.ENTITLEMENT_MAX_TTL_SECONDS ?? "2592000");
-  let exp = now + 600;
-  if (eligible && row?.current_period_end) exp = Math.min(now + maxTtl, row.current_period_end + grace);
-
-  const payload = { v: 1, sub: email, iat: now, exp, eligible, price_id: row?.price_id ?? null, status: row?.status ?? null, current_period_end: row?.current_period_end ?? null };
-  const privateKey = await importEntitlementPrivateKey(c.env);
-  const payloadB64 = base64urlEncodeString(JSON.stringify(payload));
-  const signingInput = `v1.${payloadB64}`;
-  const signature = await crypto.subtle.sign({ name: "Ed25519" }, privateKey, utf8Encode(signingInput));
-  const entitlementToken = `v1.${payloadB64}.${base64urlEncode(new Uint8Array(signature))}`;
-
-  return c.json({ ok: true, email, eligible, token: entitlementToken });
-});
+app.post("/entitlement/token", entitlementTokenHandler);
 
 app.get("/.well-known/identity-public-key", (c) => {
   return c.json({ ok: true, public_key_pem: c.env.IDENTITY_PUBLIC_KEY });
