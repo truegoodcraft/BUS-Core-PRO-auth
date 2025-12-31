@@ -61,7 +61,7 @@ app.post("/magic/start", async (c) => {
 
   await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
 
-  if (c.env.ENVIRONMENT === "dev" || c.env.WORKER_ENV === "development") {
+  if (c.env.WORKER_ENV === "development") {
     console.log({ event: "magic_start_dev", email, code });
   }
 
