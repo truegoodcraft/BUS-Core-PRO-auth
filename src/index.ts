@@ -18,6 +18,7 @@ export type Env = {
   ENTITLEMENT_MAX_TTL_SECONDS?: string;
   IDENTITY_PRIVATE_KEY: string;
   IDENTITY_PUBLIC_KEY: string;
+  ENVIRONMENT?: string;
   RESEND_API_KEY: string;
   STATS_KEY: string;
   MAGIC_LINK_TTL: string;

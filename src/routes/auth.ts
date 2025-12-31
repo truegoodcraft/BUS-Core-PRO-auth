@@ -8,21 +8,31 @@ export const app = new Hono<{ Bindings: Env }>();
 
 app.post("/magic/start", async (c) => {
   const body = await c.req.json<{ email?: string }>().catch(() => ({}));
-  const email = typeof body.email === "string" ? body.email : "";
+  const rawEmail = typeof body.email === "string" ? body.email : "";
+  const email = rawEmail.trim().toLowerCase();
   const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-  const allowed = await checkRateLimit(
+  const ipAllowed = await checkRateLimit(
     c.env.RATE_LIMITS,
-    `ratelimit:ip:${ip}`,
+    `rl:magic:start:ip:${ip}`,
     5,
     900
   );
-  if (!allowed) {
-    return c.json({ error: "Too many requests" }, 429);
+  const emailAllowed = isValidEmail
+    ? await checkRateLimit(
+        c.env.RATE_LIMITS,
+        `rl:magic:start:email:${email}`,
+        3,
+        900
+      )
+    : true;
+  if (!ipAllowed || !emailAllowed || !isValidEmail) {
+    return c.json({ ok: true });
   }
 
   const code = generateNumericCode(6);
-  const tokenHash = await hashString(code);
+  const tokenHash = await hashString(`${code}:${email}`);
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = now + 900;
 
@@ -39,6 +49,10 @@ app.post("/magic/start", async (c) => {
     .run();
 
   await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
+
+  if (c.env.ENVIRONMENT === "dev") {
+    console.log({ event: "magic_start_dev", email, code });
+  }
 
   return c.json({ ok: true });
 });
