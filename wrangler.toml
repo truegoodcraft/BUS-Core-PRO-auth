@@ -3,8 +3,11 @@ main = "src/index.ts"
 compatibility_date = "2025-12-01"
 workers_dev = true
 
+
+
 [vars]
 ADMIN_IP_ALLOWLIST = "142.90.207.149"
+ENVIRONMENT = "dev"
 ELIGIBLE_PRICE_IDS = "price_1SifxXBAvVMaiDTdz1QF6BM1"
 CHECKOUT_SUCCESS_URL = "https://buscore.ca/success"
 CHECKOUT_CANCEL_URL = "https://buscore.ca/cancel"
@@ -18,7 +21,11 @@ MCowBQYDK2VwAyEA1vhCDACNL3gDVRYyeFTjEMdHMVfF12+yvnzVLld0q3s=
 -----END PUBLIC KEY-----
 """
 
-ENTITLEMENT_PUBLIC_KEY = ""
+ENTITLEMENT_PUBLIC_KEY = """
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEApkwsnpN3OA/x8cbHIKqU6UIXu//MNeEMqYNmxMmtQgY=
+-----END PUBLIC KEY----- 
+"""
 
 # Keep logs enabled so you can debug in Cloudflare dashboard
 [observability.logs]
@@ -29,10 +36,9 @@ binding = "DB"
 database_name = "bus-auth-db"
 database_id = "c4120c73-2d08-4e87-8e4c-e402cfbb4f05"
 
-routes = [
-  { pattern = "auth.buscore.ca/*", zone_name = "buscore.ca" }
-]
+
 
 [[kv_namespaces]]
 binding = "RATE_LIMITS"
-id = "eaeb742be3214279a15bb5d352ecb56c"
+id = "faae0e26a10744e98aee473e3186b0dd"
+preview_id = "faae0e26a10744e98aee473e3186b0dd"
