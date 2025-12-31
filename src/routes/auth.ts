@@ -71,6 +71,9 @@ app.post("/magic/start", async (c) => {
     await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
   })());
 
+  if (c.env.ENVIRONMENT !== "prod" && c.req.header("x-admin-key") === c.env.ADMIN_API_KEY) {
+    c.header("x-bus-dev-code", code);
+  }
   return c.json({ ok: true });
 });
 
