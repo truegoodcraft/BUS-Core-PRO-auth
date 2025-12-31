@@ -47,6 +47,10 @@ app.post("/magic/start", async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = now + 900;
 
+  if (c.env.ENVIRONMENT !== "prod") {
+    console.log(JSON.stringify({ event: "magic_start_dev", email, code, expires_in_sec: 900 }));
+  }
+
   await c.env.DB.prepare(
     `INSERT OR REPLACE INTO auth_magic_links (
       email,
@@ -59,11 +63,13 @@ app.post("/magic/start", async (c) => {
     .bind(email, tokenHash, expiresAt, now, ip)
     .run();
 
-  await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
-
-  if (c.env.WORKER_ENV === "development") {
-    console.log({ event: "magic_start_dev", email, code });
-  }
+  c.executionCtx.waitUntil((async () => {
+    if (c.env.ENVIRONMENT !== "prod") {
+      console.log(JSON.stringify({ event: "magic_email_skip", to: email }));
+      return;
+    }
+    await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
+  })());
 
   return c.json({ ok: true });
 });
@@ -78,8 +84,8 @@ app.post("/magic/verify", async (c) => {
   const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-  if (c.env.WORKER_ENV === "development") {
-    console.log({ event: "magic_verify_dev", email });
+  if (c.env.ENVIRONMENT !== "prod") {
+    console.log(JSON.stringify({ event: "magic_verify_dev", email }));
   }
 
   if (!isValidEmail || !code) {
@@ -132,7 +138,7 @@ app.post("/magic/verify", async (c) => {
     return c.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown";
-    console.log({ event: "magic_verify_error", msg: message });
+    console.warn(JSON.stringify({ event: "magic_verify_error", msg: message }));
     return c.json({ ok: false, error: "invalid_or_expired" });
   }
 });
