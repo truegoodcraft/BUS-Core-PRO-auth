@@ -78,7 +78,7 @@ app.post("/magic/verify", async (c) => {
   const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-  if (c.env.ENVIRONMENT === "dev" || c.env.WORKER_ENV === "development") {
+  if (c.env.WORKER_ENV === "development") {
     console.log({ event: "magic_verify_dev", email });
   }
 
