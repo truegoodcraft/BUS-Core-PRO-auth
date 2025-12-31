@@ -42,39 +42,45 @@ app.post("/magic/start", async (c) => {
     return c.json({ ok: true });
   }
 
-  const code = generateNumericCode(6);
-  const tokenHash = await hashString(`${code}:${email}`);
-  const now = Math.floor(Date.now() / 1000);
-  const expiresAt = now + 900;
+  try {
+    const code = generateNumericCode(6);
+    const tokenHash = await hashString(`${code}:${email}`);
+    const now = Math.floor(Date.now() / 1000);
+    const expiresAt = now + 900;
 
-  if (c.env.ENVIRONMENT !== "prod") {
-    console.log(JSON.stringify({ event: "magic_start_dev", email, code, expires_in_sec: 900 }));
-  }
-
-  await c.env.DB.prepare(
-    `INSERT OR REPLACE INTO auth_magic_links (
-      email,
-      code_hash,
-      expires_at,
-      created_at,
-      ip_address
-    ) VALUES (?, ?, ?, ?, ?)`
-  )
-    .bind(email, tokenHash, expiresAt, now, ip)
-    .run();
-
-  c.executionCtx.waitUntil((async () => {
     if (c.env.ENVIRONMENT !== "prod") {
-      console.log(JSON.stringify({ event: "magic_email_skip", to: email }));
-      return;
+      console.log(JSON.stringify({ event: "magic_start_dev", email, code, expires_in_sec: 900 }));
     }
-    await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
-  })());
 
-  if (c.env.ENVIRONMENT !== "prod" && c.req.header("x-admin-key") === c.env.ADMIN_API_KEY) {
-    c.header("x-bus-dev-code", code);
+    await c.env.DB.prepare(
+      `INSERT OR REPLACE INTO auth_magic_links (
+        email,
+        code_hash,
+        expires_at,
+        created_at,
+        ip_address
+      ) VALUES (?, ?, ?, ?, ?)`
+    )
+      .bind(email, tokenHash, expiresAt, now, ip)
+      .run();
+
+    c.executionCtx.waitUntil((async () => {
+      if (c.env.ENVIRONMENT !== "prod") {
+        console.log(JSON.stringify({ event: "magic_email_skip", to: email }));
+        return;
+      }
+      await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
+    })());
+
+    if (c.env.ENVIRONMENT !== "prod" && c.req.header("x-admin-key") === c.env.ADMIN_API_KEY) {
+      c.header("x-bus-dev-code", code);
+    }
+    return c.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    console.warn(JSON.stringify({ event: "magic_start_error", msg: message }));
+    return c.json({ ok: true });
   }
-  return c.json({ ok: true });
 });
 
 app.post("/magic/verify", async (c) => {
