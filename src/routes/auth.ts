@@ -136,7 +136,14 @@ app.post("/magic/verify", async (c) => {
       return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
 
-    const token = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
+    const privateKeyPem =
+      c.env.IDENTITY_PRIVATE_KEY || c.env.IDENTITY_SIGNING_KEY || c.env.IDENTITY_KEY;
+    if (!privateKeyPem) {
+      console.error("[magic:verify] missing IDENTITY_PRIVATE_KEY");
+      return c.json({ ok: false, error: "server_misconfigured" }, 500);
+    }
+
+    const token = await signIdentityToken({ email }, privateKeyPem);
     const exp = getExpFromJwt(token);
 
     await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?").bind(email).run();
