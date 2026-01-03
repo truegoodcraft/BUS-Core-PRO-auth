@@ -82,6 +82,7 @@ app.post("/magic/start", async (c) => {
       .bind(email, tokenHash, expiresAt, now, ip)
       .run();
 
+    console.log("[magic:start] persisted", { email, expires_unix: expiresAt });
     console.log("[magic:start] code persisted");
     console.log("[magic:start] about to send", { to: normalizedEmail });
     try {
@@ -122,7 +123,7 @@ app.post("/magic/verify", async (c) => {
 
   try {
     const record = await c.env.DB.prepare(
-      "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ? ORDER BY created_at DESC LIMIT 1"
+      "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ? LIMIT 1"
     )
       .bind(email)
       .first<{ code_hash: string; expires_at: number }>();
@@ -133,7 +134,7 @@ app.post("/magic/verify", async (c) => {
       return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
     if (now > record.expires_at) {
-      console.log("[magic:verify] expired", { email, exp: record.expires_at });
+      console.log("[magic:verify] expired", { email, now, exp: record.expires_at });
       await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
         .bind(email)
         .run();
@@ -146,12 +147,12 @@ app.post("/magic/verify", async (c) => {
       return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
 
+    const token = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
+    const exp = getExpFromJwt(token);
+
     await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
       .bind(email)
       .run();
-
-    const token = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
-    const exp = getExpFromJwt(token);
     console.log("[magic:verify] ok", { sub: email, exp });
 
     return c.json({
