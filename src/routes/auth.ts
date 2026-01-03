@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { hashString, generateNumericCode } from "../services/crypto";
 import { sendMagicEmail } from "../email/resend";
-import { checkRateLimit } from "../services/ratelimit";
+import { assertRateLimit } from "../lib/rate-limit";
 import type { Env } from "../index";
 
 export const app = new Hono<{ Bindings: Env }>();
@@ -21,7 +21,6 @@ app.post("/magic/start", async (c) => {
   const ct = c.req.header("content-type") || "";
   const rawReq = await c.req.raw.clone().text();
   console.log("[magic:start] content-type", ct);
-  console.log("[magic:start] raw-body", rawReq.slice(0, 256));
 
   let email = "";
   if (ct.includes("application/json")) {
@@ -30,7 +29,6 @@ app.post("/magic/start", async (c) => {
       email = (j?.email ?? "").trim().toLowerCase();
     } catch {
       // fall through
-      console.log("[magic:start] json parse failed");
     }
   }
   if (!email && ct.includes("application/x-www-form-urlencoded")) {
@@ -41,7 +39,6 @@ app.post("/magic/start", async (c) => {
     const match = rawReq.match(/email\s*:\s*"?([^\s"'}]+)"?/i);
     if (match && match[1]) {
       email = match[1].trim().toLowerCase();
-      console.log("[magic:start] regex-extracted email", { to: email });
     }
   }
 
@@ -51,43 +48,19 @@ app.post("/magic/start", async (c) => {
   }
   console.log("[magic:start] parsed email", { to: email });
   const normalizedEmail = email;
-  const forwardedFor = (c.req.header("x-forwarded-for") ?? "").split(",")[0]?.trim();
-  const cfIp = c.req.header("CF-Connecting-IP");
-  const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
+  const ip = c.req.header("CF-Connecting-IP") ?? "0.0.0.0";
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   if (!isValidEmail) {
     return c.json({ ok: true });
   }
 
-  const isDev = (c.env as any)?.ENVIRONMENT !== "production";
-  if (isDev) {
-    console.log("[magic:start] dev mode: skipping rate limit");
-  } else {
-    try {
-      console.log("[magic:start] rate-limit: checking…", { to: email });
-      const ipAllowed = await checkRateLimit(
-        c.env.RATE_LIMITS,
-        `rl:magic:start:ip:${ip}`,
-        5,
-        900
-      );
-      const emailAllowed = await checkRateLimit(
-        c.env.RATE_LIMITS,
-        `rl:magic:start:email:${email}`,
-        3,
-        900
-      );
-      if (!ipAllowed || !emailAllowed) {
-        console.log("[magic:start] rate-limit: blocked", { to: email });
-        return c.json({ ok: true });
-      }
-      console.log("[magic:start] rate-limit: ok");
-    } catch (error) {
-      console.log("[magic:start] rate-limit: blocked", { to: email, err: String(error) });
-      return c.json({ ok: true });
-    }
-  }
+  const tooManyIp = await assertRateLimit(c, "magic:start:ip", ip, 5, 15 * 60);
+  if (tooManyIp) return tooManyIp;
+
+  const tooManyEmail = await assertRateLimit(c, "magic:start:email", email, 3, 15 * 60);
+  if (tooManyEmail) return tooManyEmail;
+
   console.log("[magic:start] passed rate limit");
 
   try {
@@ -95,10 +68,6 @@ app.post("/magic/start", async (c) => {
     const tokenHash = await hashString(`${code}:${email}`);
     const now = Math.floor(Date.now() / 1000);
     const expiresAt = now + 900;
-
-    if (c.env.ENVIRONMENT !== "prod") {
-      console.log(JSON.stringify({ event: "magic_start_dev", email, code, expires_in_sec: 900 }));
-    }
 
     await c.env.DB.prepare(
       `INSERT OR REPLACE INTO auth_magic_links (
@@ -126,9 +95,6 @@ app.post("/magic/start", async (c) => {
       });
     }
 
-    if (c.env.ENVIRONMENT !== "prod" && c.req.header("x-admin-key") === c.env.ADMIN_API_KEY) {
-      c.header("x-bus-dev-code", code);
-    }
     return c.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown";
@@ -142,34 +108,15 @@ app.post("/magic/verify", async (c) => {
   const rawEmail = typeof body.email === "string" ? body.email : "";
   const email = rawEmail.trim().toLowerCase();
   const code = typeof body.code === "string" ? body.code : "";
-  const forwardedFor = (c.req.header("x-forwarded-for") ?? "").split(",")[0]?.trim();
-  const cfIp = c.req.header("CF-Connecting-IP");
-  const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
+  const ip = c.req.header("CF-Connecting-IP") ?? "0.0.0.0";
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-
-  if (c.env.ENVIRONMENT !== "prod") {
-    console.log(JSON.stringify({ event: "magic_verify_dev", email }));
-  }
 
   if (!isValidEmail || !code) {
     return c.json({ ok: false, error: "invalid_input" }, 400);
   }
 
-  const ipAllowed = await checkRateLimit(
-    c.env.RATE_LIMITS,
-    `rl:magic:verify:ip:${ip}`,
-    5,
-    900
-  );
-  const emailAllowed = await checkRateLimit(
-    c.env.RATE_LIMITS,
-    `rl:magic:verify:email:${email}`,
-    5,
-    900
-  );
-  if (!ipAllowed || !emailAllowed) {
-    return c.json({ ok: false, error: "rate_limited" });
-  }
+  const tooManyVerify = await assertRateLimit(c, "magic:verify:ip", ip, 10, 15 * 60);
+  if (tooManyVerify) return tooManyVerify;
 
   try {
     const record = await c.env.DB.prepare(
