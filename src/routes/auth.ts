@@ -104,7 +104,10 @@ app.post("/magic/verify", async (c) => {
   const code = (body.code ?? "").trim();
   const ip = c.req.header("CF-Connecting-IP") ?? "0.0.0.0";
 
-  if (!email || !code) return c.json({ ok: false, error: "invalid_input" }, 400);
+  if (!email || !code) {
+    console.log("[magic:verify] invalid_input", { hasEmail: !!email, hasCode: !!code });
+    return c.json({ ok: false, error: "invalid_input" }, 400);
+  }
 
   const tooManyVerify = await assertRateLimit(c, "magic:verify:ip", ip, 10, 15 * 60);
   if (tooManyVerify) return tooManyVerify;
@@ -138,7 +141,7 @@ app.post("/magic/verify", async (c) => {
 
     await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?").bind(email).run();
 
-    console.log("[magic:verify] ok", { sub: email, exp });
+    console.log("[magic:verify] success", { sub: email, exp, token_len: token.length });
     return c.json({
       ok: true,
       identity_token: token,
