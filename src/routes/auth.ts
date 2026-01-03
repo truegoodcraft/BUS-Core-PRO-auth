@@ -1,6 +1,7 @@
 import { Hono } from "hono";
-import { hashString, generateNumericCode } from "../services/crypto";
+import { hashString, generateNumericCode, signIdentityToken } from "../services/crypto";
 import { sendMagicEmail } from "../email/resend";
+import { getExpFromJwt } from "../lib/jwt";
 import { assertRateLimit } from "../lib/rate-limit";
 import type { Env } from "../index";
 
@@ -81,6 +82,7 @@ app.post("/magic/start", async (c) => {
       .bind(email, tokenHash, expiresAt, now, ip)
       .run();
 
+    console.log("[magic:start] persisted", { email, expires_unix: expiresAt });
     console.log("[magic:start] code persisted");
     console.log("[magic:start] about to send", { to: normalizedEmail });
     try {
@@ -104,51 +106,55 @@ app.post("/magic/start", async (c) => {
 });
 
 app.post("/magic/verify", async (c) => {
+  console.log("[magic:verify] handler entry");
   const body = await c.req.json<{ email?: string; code?: string }>().catch(() => ({}));
-  const rawEmail = typeof body.email === "string" ? body.email : "";
-  const email = rawEmail.trim().toLowerCase();
-  const code = typeof body.code === "string" ? body.code : "";
+  const email = (body.email ?? "").trim().toLowerCase();
+  const code = (body.code ?? "").trim();
   const ip = c.req.header("CF-Connecting-IP") ?? "0.0.0.0";
-  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-  if (!isValidEmail || !code) {
-    return c.json({ ok: false, error: "invalid_input" }, 400);
-  }
+  if (!email || !code) return c.json({ ok: false, error: "invalid_input" }, 400);
 
   const tooManyVerify = await assertRateLimit(c, "magic:verify:ip", ip, 10, 15 * 60);
   if (tooManyVerify) return tooManyVerify;
 
   try {
     const record = await c.env.DB.prepare(
-      "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ?"
+      "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ? ORDER BY created_at DESC LIMIT 1"
     )
       .bind(email)
       .first<{ code_hash: string; expires_at: number }>();
 
-    const now = Math.floor(Date.now() / 1000);
     if (!record) {
-      return c.json({ ok: false, error: "invalid_or_expired" });
+      console.log("[magic:verify] no_code", { email });
+      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
-    if (record.expires_at <= now) {
-      await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
-        .bind(email)
-        .run();
-      return c.json({ ok: false, error: "invalid_or_expired" });
+
+    const now = Math.floor(Date.now() / 1000);
+    if (now > record.expires_at) {
+      console.log("[magic:verify] expired", { email, now, exp: record.expires_at });
+      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
 
     const expectedHash = await hashString(`${code}:${email}`);
     if (!constantTimeEqual(expectedHash, record.code_hash)) {
-      return c.json({ ok: false, error: "invalid_or_expired" });
+      console.log("[magic:verify] mismatch", { email });
+      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
 
-    await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
-      .bind(email)
-      .run();
+    const token = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
+    const exp = getExpFromJwt(token);
 
-    return c.json({ ok: true });
+    await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?").bind(email).run();
+
+    console.log("[magic:verify] ok", { sub: email, exp });
+    return c.json({
+      ok: true,
+      identity_token: token,
+      token,
+      exp,
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown";
-    console.warn(JSON.stringify({ event: "magic_verify_error", msg: message }));
-    return c.json({ ok: false, error: "invalid_or_expired" });
+    console.error("[magic:verify] internal error", error);
+    return c.json({ ok: false, error: "invalid_or_expired" }, 401);
   }
 });
