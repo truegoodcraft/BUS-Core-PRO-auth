@@ -267,44 +267,48 @@ app.post("/stripe/webhook", async (c) => {
   switch (event.type) {
     case "customer.subscription.created": {
       const sub = event.data.object as Stripe.Subscription;
+
       const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null;
       const priceId = sub.items?.data?.[0]?.price?.id ?? (sub as any)?.plan?.id ?? null;
       const status = sub.status ?? null;
-      const cpeItem = sub.items?.data?.[0]?.current_period_end ?? null;
-      const cpeSub = (sub as any).current_period_end ?? null;
-      const currentPeriodEnd = (cpeItem ?? cpeSub) ? new Date((cpeItem ?? cpeSub) * 1000).toISOString() : null;
 
-      // Fetch customer to obtain email (Payment Links flow doesn't include it on subscription)
+      // prefer item-level period_end, fallback to subscription-level
+      const cpe = sub.items?.data?.[0]?.current_period_end ?? (sub as any).current_period_end ?? null;
+      const cpeEpoch = cpe ? Number(cpe) : null; // INTEGER seconds
+
+      // fetch email
       let email: string | null = null;
       if (customerId) {
         const cust = await stripe.customers.retrieve(customerId);
         const e = (cust as any)?.email;
         if (e) email = String(e).trim().toLowerCase();
       }
-
       if (!email) {
-        await logError?.("sub.created: missing email; ack to avoid retries", { subId: sub.id, customerId, priceId, status });
+        await logError?.("sub.created: missing email; ack 200", { subId: sub.id, customerId, priceId, status });
         return c.json({ ok: true }, 200);
       }
 
+      // UPSERT with created_at/updated_at integers
       await c.env.DB
         .prepare(
-          `INSERT INTO entitlements (email, stripe_customer_id, subscription_id, price_id, status, current_period_end)
-             VALUES (?, ?, ?, ?, ?, ?)
+          `INSERT INTO entitlements
+             (email, status, price_id, current_period_end, stripe_customer_id, subscription_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
            ON CONFLICT(email) DO UPDATE SET
+             status = excluded.status,
+             price_id = excluded.price_id,
+             current_period_end = excluded.current_period_end,
              stripe_customer_id = excluded.stripe_customer_id,
-             subscription_id    = excluded.subscription_id,
-             price_id           = excluded.price_id,
-             status             = excluded.status,
-             current_period_end = excluded.current_period_end`
+             subscription_id = excluded.subscription_id,
+             updated_at = strftime('%s','now')`
         )
         .bind(
           n(email),
-          n(customerId),
-          n(sub.id),
-          n(priceId),
           n(status),
-          n(currentPeriodEnd)
+          n(priceId),
+          n(cpeEpoch),
+          n(customerId),
+          n(sub.id)
         )
         .run();
 
@@ -312,14 +316,14 @@ app.post("/stripe/webhook", async (c) => {
     }
     case "customer.subscription.updated": {
       const sub = event.data.object as Stripe.Subscription;
+
       const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null;
       const priceId = sub.items?.data?.[0]?.price?.id ?? (sub as any)?.plan?.id ?? null;
       const status = sub.status ?? null;
-      const cpeItem = sub.items?.data?.[0]?.current_period_end ?? null;
-      const cpeSub = (sub as any).current_period_end ?? null;
-      const currentPeriodEnd = (cpeItem ?? cpeSub) ? new Date((cpeItem ?? cpeSub) * 1000).toISOString() : null;
 
-      // Try to resolve email; if missing, ACK 200 and rely on reconcile
+      const cpe = sub.items?.data?.[0]?.current_period_end ?? (sub as any).current_period_end ?? null;
+      const cpeEpoch = cpe ? Number(cpe) : null;
+
       let email: string | null = null;
       if (customerId) {
         const cust = await stripe.customers.retrieve(customerId);
@@ -327,28 +331,30 @@ app.post("/stripe/webhook", async (c) => {
         if (e) email = String(e).trim().toLowerCase();
       }
       if (!email) {
-        await logError?.("sub.updated: missing email; ack to avoid retries", { subId: sub.id, customerId, priceId, status });
+        await logError?.("sub.updated: missing email; ack 200", { subId: sub.id, customerId, priceId, status });
         return c.json({ ok: true }, 200);
       }
 
       await c.env.DB
         .prepare(
-          `INSERT INTO entitlements (email, stripe_customer_id, subscription_id, price_id, status, current_period_end)
-             VALUES (?, ?, ?, ?, ?, ?)
+          `INSERT INTO entitlements
+             (email, status, price_id, current_period_end, stripe_customer_id, subscription_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
            ON CONFLICT(email) DO UPDATE SET
+             status = excluded.status,
+             price_id = excluded.price_id,
+             current_period_end = excluded.current_period_end,
              stripe_customer_id = excluded.stripe_customer_id,
-             subscription_id    = excluded.subscription_id,
-             price_id           = excluded.price_id,
-             status             = excluded.status,
-             current_period_end = excluded.current_period_end`
+             subscription_id = excluded.subscription_id,
+             updated_at = strftime('%s','now')`
         )
         .bind(
           n(email),
-          n(customerId),
-          n(sub.id),
-          n(priceId),
           n(status),
-          n(currentPeriodEnd)
+          n(priceId),
+          n(cpeEpoch),
+          n(customerId),
+          n(sub.id)
         )
         .run();
 
