@@ -4,7 +4,10 @@ export function getExpFromJwt(token: string): number {
     if (parts.length < 2) return 0;
 
     let base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    while (base64.length % 4 !== 0) {
+    const pad = base64.length % 4;
+    if (pad === 2) {
+      base64 += "==";
+    } else if (pad === 3) {
       base64 += "=";
     }
 
