@@ -30,18 +30,18 @@ app.post("/magic/start", async (c) => {
       email = (j?.email ?? "").trim().toLowerCase();
     } catch {
       // fall through
+      console.log("[magic:start] json parse failed");
     }
   }
   if (!email && ct.includes("application/x-www-form-urlencoded")) {
     const p = new URLSearchParams(rawReq);
     email = (p.get("email") ?? "").trim().toLowerCase();
   }
-  if (!email && rawReq.startsWith("{")) {
-    try {
-      const j = JSON.parse(rawReq);
-      email = (j?.email ?? "").trim().toLowerCase();
-    } catch {
-      // ignore
+  if (!email) {
+    const match = rawReq.match(/email\s*:\s*"?([^\s"'}]+)"?/i);
+    if (match && match[1]) {
+      email = match[1].trim().toLowerCase();
+      console.log("[magic:start] regex-extracted email", { to: email });
     }
   }
 
@@ -56,22 +56,37 @@ app.post("/magic/start", async (c) => {
   const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-  const ipAllowed = await checkRateLimit(
-    c.env.RATE_LIMITS,
-    `rl:magic:start:ip:${ip}`,
-    5,
-    900
-  );
-  const emailAllowed = isValidEmail
-    ? await checkRateLimit(
+  if (!isValidEmail) {
+    return c.json({ ok: true });
+  }
+
+  const isDev = (c.env as any)?.ENVIRONMENT !== "production";
+  if (isDev) {
+    console.log("[magic:start] dev mode: skipping rate limit");
+  } else {
+    try {
+      console.log("[magic:start] rate-limit: checking…", { to: email });
+      const ipAllowed = await checkRateLimit(
+        c.env.RATE_LIMITS,
+        `rl:magic:start:ip:${ip}`,
+        5,
+        900
+      );
+      const emailAllowed = await checkRateLimit(
         c.env.RATE_LIMITS,
         `rl:magic:start:email:${email}`,
         3,
         900
-      )
-    : true;
-  if (!ipAllowed || !emailAllowed || !isValidEmail) {
-    return c.json({ ok: true });
+      );
+      if (!ipAllowed || !emailAllowed) {
+        console.log("[magic:start] rate-limit: blocked", { to: email });
+        return c.json({ ok: true });
+      }
+      console.log("[magic:start] rate-limit: ok");
+    } catch (error) {
+      console.log("[magic:start] rate-limit: blocked", { to: email, err: String(error) });
+      return c.json({ ok: true });
+    }
   }
   console.log("[magic:start] passed rate limit");
 
