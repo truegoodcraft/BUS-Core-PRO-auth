@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import Stripe from "stripe";
 import { app as authRouter } from "./routes/auth";
+import { sendMagicEmail } from "./email/resend";
 import { entitlementTokenHandler } from "./routes/entitlement";
 import { verifyIdentityToken } from "./services/crypto";
 
@@ -146,6 +147,12 @@ app.get("/health", (c) => {
     version: "0.1.0",
     email_configured: emailConfigured,
   });
+});
+
+app.post("/admin/test/email", async (c) => {
+  const to = c.req.query("to") || "you@your-verified-domain.com";
+  await sendMagicEmail(c.env, to, "BUS Core test email", "This is a test email from bus-auth.");
+  return c.json({ ok: true, to });
 });
 
 app.post("/billing/create-checkout-session", async (c) => {

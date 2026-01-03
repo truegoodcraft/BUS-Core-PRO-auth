@@ -65,13 +65,15 @@ app.post("/magic/start", async (c) => {
       .bind(email, tokenHash, expiresAt, now, ip)
       .run();
 
+    console.log("[magic:start] about to send", { to: normalizedEmail });
     try {
-      const subject = "Your BUS Pro sign-in code";
+      const subject = "Your BUS Core Login Code";
       const text = `Your code is ${code}. It expires in 15 minutes.`;
       await sendMagicEmail(c.env, normalizedEmail, subject, text);
+      console.log("[magic:start] send completed", { to: normalizedEmail });
     } catch (err) {
       console.error("[magic:start] send failed", {
-        email: normalizedEmail,
+        to: normalizedEmail,
         err: String(err),
       });
     }
