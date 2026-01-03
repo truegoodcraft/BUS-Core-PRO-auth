@@ -15,21 +15,27 @@ export async function assertRateLimit(
 
   const raw = await kv.get(bucket);
   let count = 0;
-  let reset = now + windowSec;
+  // Cloudflare KV requires expiration_ttl >= 60; also guard windowSec
+  const minTtl = 60;
+  const window = Math.max(windowSec, minTtl);
+  let reset = now + window;
 
   if (raw) {
     const [storedCount, storedReset] = raw.split(":").map(Number);
     count = storedCount || 0;
     reset = storedReset || reset;
-    if (now > reset) {
+    // Window elapsed → reset counter/window
+    if (now >= reset) {
       count = 0;
-      reset = now + windowSec;
+      reset = now + window;
     }
   }
 
   count += 1;
 
-  await kv.put(bucket, `${count}:${reset}`, { expirationTtl: Math.max(1, reset - now) });
+  // write (store as "count:reset") with TTL clamped to >= 60s
+  const ttl = Math.max(minTtl, reset - now);
+  await kv.put(bucket, `${count}:${reset}`, { expirationTtl: ttl });
 
   if (count > limit) {
     return c.json({ ok: false, error: "rate_limited", reset }, 429);
