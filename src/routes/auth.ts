@@ -128,9 +128,11 @@ app.post("/magic/verify", async (c) => {
 
     const now = Math.floor(Date.now() / 1000);
     if (!record) {
+      console.log("[magic:verify] no_code", { email });
       return c.json({ ok: false, error: "invalid_or_expired" });
     }
     if (record.expires_at <= now) {
+      console.log("[magic:verify] expired", { email, exp: record.expires_at });
       await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
         .bind(email)
         .run();
@@ -139,6 +141,7 @@ app.post("/magic/verify", async (c) => {
 
     const expectedHash = await hashString(`${code}:${email}`);
     if (!constantTimeEqual(expectedHash, record.code_hash)) {
+      console.log("[magic:verify] mismatch", { email });
       return c.json({ ok: false, error: "invalid_or_expired" });
     }
 
