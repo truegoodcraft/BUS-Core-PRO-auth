@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { hashString, generateNumericCode } from "../services/crypto";
-import { sendMagicCode } from "../services/email";
+import { sendMagicEmail } from "../email/resend";
 import { checkRateLimit } from "../services/ratelimit";
 import type { Env } from "../index";
 
@@ -19,6 +19,7 @@ app.post("/magic/start", async (c) => {
   const body = await c.req.json<{ email?: string }>().catch(() => ({}));
   const rawEmail = typeof body.email === "string" ? body.email : "";
   const email = rawEmail.trim().toLowerCase();
+  const normalizedEmail = email;
   const forwardedFor = (c.req.header("x-forwarded-for") ?? "").split(",")[0]?.trim();
   const cfIp = c.req.header("CF-Connecting-IP");
   const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
@@ -64,13 +65,16 @@ app.post("/magic/start", async (c) => {
       .bind(email, tokenHash, expiresAt, now, ip)
       .run();
 
-    c.executionCtx.waitUntil((async () => {
-      if (c.env.ENVIRONMENT !== "prod") {
-        console.log(JSON.stringify({ event: "magic_email_skip", to: email }));
-        return;
-      }
-      await sendMagicCode(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, email, code);
-    })());
+    try {
+      const subject = "Your BUS Pro sign-in code";
+      const text = `Your code is ${code}. It expires in 15 minutes.`;
+      await sendMagicEmail(c.env, normalizedEmail, subject, text);
+    } catch (err) {
+      console.error("[magic:start] send failed", {
+        email: normalizedEmail,
+        err: String(err),
+      });
+    }
 
     if (c.env.ENVIRONMENT !== "prod" && c.req.header("x-admin-key") === c.env.ADMIN_API_KEY) {
       c.header("x-bus-dev-code", code);

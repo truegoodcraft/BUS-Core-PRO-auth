@@ -137,7 +137,16 @@ app.use("/admin/*", async (c, next) => {
 });
 
 // Routes
-app.get("/health", (c) => c.json({ ok: true, service: "bus-auth", version: "0.1.0" }));
+app.get("/health", (c) => {
+  const env = c.env as Env;
+  const emailConfigured = Boolean(env?.RESEND_API_KEY && env?.EMAIL_FROM);
+  return c.json({
+    ok: true,
+    service: "bus-auth",
+    version: "0.1.0",
+    email_configured: emailConfigured,
+  });
+});
 
 app.post("/billing/create-checkout-session", async (c) => {
   const body = await c.req.json<{ email?: string; price_id?: string }>().catch(() => ({}));
