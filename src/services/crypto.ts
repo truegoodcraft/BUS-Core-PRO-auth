@@ -1,35 +1,26 @@
-import { b64urlToB64 } from "../lib/jwt";
-
-// Helper to safely decode PEM (handles whitespace/newlines correctly)
 const pemToDer = (pem: string): ArrayBuffer => {
-  // Remove PEM headers/footers and ALL whitespace (including \r\n)
+  if (!pem || typeof pem !== "string") throw new Error("missing_private_key");
+  // Nuclear strip: remove headers/footers and ANY non-base64 char
   const stripped = pem
     .replace(/-----BEGIN [^-]+-----/g, "")
     .replace(/-----END [^-]+-----/g, "")
-    .replace(/\s+/g, "");
-
-  const binary = atob(stripped);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
+    .replace(/[^A-Za-z0-9+/=]/g, "");
+  const bin = atob(stripped);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out.buffer;
 };
 
-const utf8Encode = (value: string): Uint8Array => new TextEncoder().encode(value);
-
-const base64urlEncode = (bytes: Uint8Array): string => {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  const base64 = btoa(binary);
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-};
-
-const base64urlEncodeString = (value: string): string =>
-  base64urlEncode(utf8Encode(value));
+const utf8 = (s: string) => new TextEncoder().encode(s);
+const b64u = (bytes: Uint8Array) =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+const b64uStr = (s: string) =>
+  btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 
 const base64urlDecodeToBytes = (value: string): Uint8Array => {
-  const base64 = b64urlToB64(value);
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
+  const base64 = `${normalized}${padding}`;
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {
@@ -59,21 +50,17 @@ export async function signIdentityToken(
   };
 
   const header = { alg: "EdDSA", typ: "JWT" };
-  const headerEncoded = base64urlEncodeString(JSON.stringify(header));
-  const payloadEncoded = base64urlEncodeString(JSON.stringify(fullPayload));
-  const signingInput = `${headerEncoded}.${payloadEncoded}`;
+  const signingInput = `${b64uStr(JSON.stringify(header))}.${b64uStr(JSON.stringify(fullPayload))}`;
 
-  const privateKey = await crypto.subtle.importKey(
+  const key = await crypto.subtle.importKey(
     "pkcs8",
     pemToDer(privateKeyPem),
     { name: "Ed25519" },
     false,
     ["sign"]
   );
-
-  const signature = await crypto.subtle.sign("Ed25519", privateKey, utf8Encode(signingInput));
-  const signatureEncoded = base64urlEncode(new Uint8Array(signature));
-  return `${signingInput}.${signatureEncoded}`;
+  const sig = await crypto.subtle.sign("Ed25519", key, utf8(signingInput));
+  return `${signingInput}.${b64u(new Uint8Array(sig))}`;
 }
 
 export function generateNumericCode(length: number): string {
@@ -156,7 +143,7 @@ export const verifyIdentityToken = async (
     "Ed25519",
     publicKey,
     signatureBytes,
-    utf8Encode(signingInput)
+    utf8(signingInput)
   );
 
   if (!valid) {

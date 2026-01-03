@@ -108,7 +108,7 @@ app.post("/magic/start", async (c) => {
 });
 
 app.post("/magic/verify", async (c) => {
-  console.log("[magic:verify] handler entry_v3");
+  console.log("[magic:verify] handler entry_v4");
   const body = await c.req.json<{ email?: string; code?: string }>().catch(() => ({}));
   const email = (body.email ?? "").trim().toLowerCase();
   const code = (body.code ?? "").trim();
@@ -150,39 +150,38 @@ app.post("/magic/verify", async (c) => {
     return c.json({ ok: false, error: "invalid_or_expired" }, 401);
   }
 
-  let identityToken = "";
+  let token = "";
   try {
-    identityToken = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
-  } catch (e) {
-    console.log("[magic:verify] token_sign_failed", String(e));
-    return c.json({ ok: false, error: "internal_sign_failed" }, 500);
+    token = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
+  } catch (err: unknown) {
+    console.error(
+      "[magic:verify] signing_crash",
+      err instanceof Error ? err.message : err
+    );
+    return c.json({ ok: false, error: "server_misconfigured" }, 500);
   }
 
-  console.log("[magic:verify] about_to_decode_exp");
   let exp = 0;
   try {
-    exp = getExpFromJwt(identityToken);
+    exp = getExpFromJwt(token);
   } catch {
-    exp = 0;
+    console.log("[magic:verify] exp_decode_fail_default0");
   }
 
-  try {
-    await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
-      .bind(email)
-      .run();
-  } catch (e) {
-    console.log("[magic:verify] cleanup_failed_nonfatal", { email });
-  }
+  c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
+    .bind(email)
+    .run()
+    .catch(() => {});
 
-  console.log("[magic:verify] success_v3", {
-    sub: email,
+  console.log("[magic:verify] success_v4", {
+    email,
     exp,
-    token_len: identityToken.length,
+    token_len: token.length,
   });
   return c.json({
     ok: true,
-    identity_token: identityToken,
-    token: identityToken,
+    identity_token: token,
+    token,
     exp,
   });
 });
