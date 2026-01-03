@@ -35,6 +35,9 @@ app.route("/auth", authRouter);
 
 const VALID_STATUSES = new Set(["active", "trialing"]);
 
+// Ensure no 'undefined' is ever bound to D1
+const n = <T>(v: T | undefined | null): T | null => (v === undefined ? null : (v as any));
+
 const parseEligiblePriceIds = (env: Env): string[] => {
   return (env.ELIGIBLE_PRICE_IDS ?? "")
     .split(",")
@@ -261,10 +264,109 @@ app.post("/stripe/webhook", async (c) => {
     });
   };
 
-  if (["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"].includes(event.type)) {
-    await handleSubscription(event.data.object as Stripe.Subscription);
+  switch (event.type) {
+    case "customer.subscription.created": {
+      const sub = event.data.object as Stripe.Subscription;
+
+      const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null;
+      const priceId = sub.items?.data?.[0]?.price?.id ?? (sub as any)?.plan?.id ?? null;
+      const status = sub.status ?? null;
+
+      // prefer item-level period_end, fallback to subscription-level
+      const cpe = sub.items?.data?.[0]?.current_period_end ?? (sub as any).current_period_end ?? null;
+      const cpeEpoch = cpe ? Number(cpe) : null; // INTEGER seconds
+
+      // fetch email
+      let email: string | null = null;
+      if (customerId) {
+        const cust = await stripe.customers.retrieve(customerId);
+        const e = (cust as any)?.email;
+        if (e) email = String(e).trim().toLowerCase();
+      }
+      if (!email) {
+        await logError?.("sub.created: missing email; ack 200", { subId: sub.id, customerId, priceId, status });
+        return c.json({ ok: true }, 200);
+      }
+
+      // UPSERT with created_at/updated_at integers
+      await c.env.DB
+        .prepare(
+          `INSERT INTO entitlements
+             (email, status, price_id, current_period_end, stripe_customer_id, subscription_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+           ON CONFLICT(email) DO UPDATE SET
+             status = excluded.status,
+             price_id = excluded.price_id,
+             current_period_end = excluded.current_period_end,
+             stripe_customer_id = excluded.stripe_customer_id,
+             subscription_id = excluded.subscription_id,
+             updated_at = strftime('%s','now')`
+        )
+        .bind(
+          n(email),
+          n(status),
+          n(priceId),
+          n(cpeEpoch),
+          n(customerId),
+          n(sub.id)
+        )
+        .run();
+
+      return c.json({ ok: true }, 200);
+    }
+    case "customer.subscription.updated": {
+      const sub = event.data.object as Stripe.Subscription;
+
+      const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null;
+      const priceId = sub.items?.data?.[0]?.price?.id ?? (sub as any)?.plan?.id ?? null;
+      const status = sub.status ?? null;
+
+      const cpe = sub.items?.data?.[0]?.current_period_end ?? (sub as any).current_period_end ?? null;
+      const cpeEpoch = cpe ? Number(cpe) : null;
+
+      let email: string | null = null;
+      if (customerId) {
+        const cust = await stripe.customers.retrieve(customerId);
+        const e = (cust as any)?.email;
+        if (e) email = String(e).trim().toLowerCase();
+      }
+      if (!email) {
+        await logError?.("sub.updated: missing email; ack 200", { subId: sub.id, customerId, priceId, status });
+        return c.json({ ok: true }, 200);
+      }
+
+      await c.env.DB
+        .prepare(
+          `INSERT INTO entitlements
+             (email, status, price_id, current_period_end, stripe_customer_id, subscription_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+           ON CONFLICT(email) DO UPDATE SET
+             status = excluded.status,
+             price_id = excluded.price_id,
+             current_period_end = excluded.current_period_end,
+             stripe_customer_id = excluded.stripe_customer_id,
+             subscription_id = excluded.subscription_id,
+             updated_at = strftime('%s','now')`
+        )
+        .bind(
+          n(email),
+          n(status),
+          n(priceId),
+          n(cpeEpoch),
+          n(customerId),
+          n(sub.id)
+        )
+        .run();
+
+      return c.json({ ok: true }, 200);
+    }
+    case "customer.subscription.deleted": {
+      await handleSubscription(event.data.object as Stripe.Subscription);
+      return c.json({ ok: true }, 200);
+    }
+    default:
+      return c.json({ ok: true }, 200);
   }
-  return c.json({ ok: true });
 });
 
 app.post("/billing/webhook", async (c) => {
