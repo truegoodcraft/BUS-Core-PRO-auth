@@ -150,16 +150,31 @@ app.post("/magic/verify", async (c) => {
       console.log("[magic:verify] mismatch", { email });
       return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
-    const token = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
-    const exp = getExpFromJwt(token);
+    const identityToken = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
+    let exp = 0;
+    try {
+      exp = getExpFromJwt(identityToken);
+    } catch {
+      exp = 0;
+    }
 
-    await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?").bind(email).run();
+    try {
+      await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
+        .bind(email)
+        .run();
+    } catch (err) {
+      console.log("[magic:verify] cleanup failed (non-fatal)", { email });
+    }
 
-    console.log("[magic:verify] success", { sub: email, exp, token_len: token.length });
+    console.log("[magic:verify] success", {
+      sub: email,
+      exp,
+      token_len: identityToken.length,
+    });
     return c.json({
       ok: true,
-      identity_token: token,
-      token,
+      identity_token: identityToken,
+      token: identityToken,
       exp,
     });
   } catch (error) {
