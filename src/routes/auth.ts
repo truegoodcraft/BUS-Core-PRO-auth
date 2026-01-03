@@ -1,6 +1,7 @@
 import { Hono } from "hono";
-import { hashString, generateNumericCode, signIdentityToken, getExpFromJwt } from "../services/crypto";
+import { hashString, generateNumericCode, signIdentityToken } from "../services/crypto";
 import { sendMagicEmail } from "../email/resend";
+import { getExpFromJwt } from "../lib/jwt";
 import { assertRateLimit } from "../lib/rate-limit";
 import type { Env } from "../index";
 
