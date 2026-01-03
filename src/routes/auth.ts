@@ -1,7 +1,13 @@
 import { Hono } from "hono";
-import { generateNumericCode, signIdentityToken } from "../services/crypto";
+import {
+  constantTimeEqual,
+  generateNumericCode,
+  hashMagicCode,
+  normalizeEmail,
+  short8,
+  signIdentityToken,
+} from "../services/crypto";
 import { sendMagicEmail } from "../email/resend";
-import { hashMagicCode, timingSafeEqual } from "../lib/hash";
 import { getExpFromJwt } from "../lib/jwt";
 import { assertRateLimit } from "../lib/rate-limit";
 import type { Env } from "../index";
@@ -19,19 +25,19 @@ app.post("/magic/start", async (c) => {
   if (ct.includes("application/json")) {
     try {
       const j = JSON.parse(rawReq);
-      email = (j?.email ?? "").trim().toLowerCase();
+      email = normalizeEmail(j?.email ?? "");
     } catch {
       // fall through
     }
   }
   if (!email && ct.includes("application/x-www-form-urlencoded")) {
     const p = new URLSearchParams(rawReq);
-    email = (p.get("email") ?? "").trim().toLowerCase();
+    email = normalizeEmail(p.get("email") ?? "");
   }
   if (!email) {
     const match = rawReq.match(/email\s*:\s*"?([^\s"'}]+)"?/i);
     if (match && match[1]) {
-      email = match[1].trim().toLowerCase();
+      email = normalizeEmail(match[1]);
     }
   }
 
@@ -40,7 +46,7 @@ app.post("/magic/start", async (c) => {
     return c.json({ ok: true });
   }
   console.log("[magic:start] parsed email", { to: email });
-  const normalizedEmail = email;
+  const normalizedEmail = normalizeEmail(email);
   const ip = c.req.header("CF-Connecting-IP") ?? "0.0.0.0";
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
@@ -58,7 +64,7 @@ app.post("/magic/start", async (c) => {
 
   try {
     const code = generateNumericCode(6);
-    const tokenHash = await hashMagicCode(code, email, c.env);
+    const tokenHash = await hashMagicCode(code, normalizedEmail, c.env.PEPPER);
     const now = Math.floor(Date.now() / 1000);
     const expiresAt = now + 900;
 
@@ -74,7 +80,11 @@ app.post("/magic/start", async (c) => {
       .bind(email, tokenHash, expiresAt, now, ip)
       .run();
 
-    console.log("[magic:start] persisted", { email, expires_unix: expiresAt });
+    console.log("[magic:start] persisted", {
+      email: normalizedEmail,
+      code_hash_8: short8(tokenHash),
+      expires_at: expiresAt,
+    });
     console.log("[magic:start] code persisted");
     console.log("[magic:start] about to send", { to: normalizedEmail });
     try {
@@ -130,20 +140,17 @@ app.post("/magic/verify", async (c) => {
       return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
 
-    const expectedHash = await hashMagicCode(code, email, c.env);
-    if (!timingSafeEqual(expectedHash, record.code_hash)) {
+    const expectedHash = await hashMagicCode(code, email, c.env.PEPPER);
+    const match = constantTimeEqual(expectedHash, record.code_hash);
+    console.log("[magic:verify] compare", {
+      stored_8: short8(record.code_hash),
+      expected_8: short8(expectedHash),
+    });
+    if (!match) {
       console.log("[magic:verify] mismatch", { email });
       return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
-
-    const privateKeyPem =
-      c.env.IDENTITY_PRIVATE_KEY || c.env.IDENTITY_SIGNING_KEY || c.env.IDENTITY_KEY;
-    if (!privateKeyPem) {
-      console.error("[magic:verify] missing IDENTITY_PRIVATE_KEY");
-      return c.json({ ok: false, error: "server_misconfigured" }, 500);
-    }
-
-    const token = await signIdentityToken({ email }, privateKeyPem);
+    const token = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
     const exp = getExpFromJwt(token);
 
     await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?").bind(email).run();

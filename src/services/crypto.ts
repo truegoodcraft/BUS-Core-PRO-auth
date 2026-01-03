@@ -88,6 +88,27 @@ export async function hashString(input: string): Promise<string> {
   return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+export const normalizeEmail = (e: string) => (e ?? "").trim().toLowerCase();
+
+export async function sha256Hex(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function constantTimeEqual(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i += 1) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
+export async function hashMagicCode(code: string, normalizedEmail: string, pepper?: string) {
+  return sha256Hex(`${code}:${normalizedEmail}:${pepper ?? ""}`);
+}
+
+export const short8 = (s: string) => (s ? s.slice(0, 8) : "");
+
 export const verifyIdentityToken = async (
   token: string,
   publicKeyPem: string
