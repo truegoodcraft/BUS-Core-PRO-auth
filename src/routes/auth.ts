@@ -17,15 +17,40 @@ const constantTimeEqual = (a: string, b: string): boolean => {
 
 app.post("/magic/start", async (c) => {
   console.log("[magic:start] handler entry");
-  const body = await c.req.json<{ email?: string }>().catch(() => ({}));
-  const rawEmail = typeof body.email === "string" ? body.email : "";
-  const email = rawEmail.trim().toLowerCase();
-  const normalizedEmail = email;
-  if (!normalizedEmail) {
+
+  const ct = c.req.header("content-type") || "";
+  const rawReq = await c.req.raw.clone().text();
+  console.log("[magic:start] content-type", ct);
+  console.log("[magic:start] raw-body", rawReq.slice(0, 256));
+
+  let email = "";
+  if (ct.includes("application/json")) {
+    try {
+      const j = JSON.parse(rawReq);
+      email = (j?.email ?? "").trim().toLowerCase();
+    } catch {
+      // fall through
+    }
+  }
+  if (!email && ct.includes("application/x-www-form-urlencoded")) {
+    const p = new URLSearchParams(rawReq);
+    email = (p.get("email") ?? "").trim().toLowerCase();
+  }
+  if (!email && rawReq.startsWith("{")) {
+    try {
+      const j = JSON.parse(rawReq);
+      email = (j?.email ?? "").trim().toLowerCase();
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!email) {
     console.log("[magic:start] early-exit: missing email");
     return c.json({ ok: true });
   }
-  console.log("[magic:start] parsed email", { to: normalizedEmail });
+  console.log("[magic:start] parsed email", { to: email });
+  const normalizedEmail = email;
   const forwardedFor = (c.req.header("x-forwarded-for") ?? "").split(",")[0]?.trim();
   const cfIp = c.req.header("CF-Connecting-IP");
   const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
