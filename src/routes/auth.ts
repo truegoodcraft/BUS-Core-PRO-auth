@@ -16,10 +16,16 @@ const constantTimeEqual = (a: string, b: string): boolean => {
 };
 
 app.post("/magic/start", async (c) => {
+  console.log("[magic:start] handler entry");
   const body = await c.req.json<{ email?: string }>().catch(() => ({}));
   const rawEmail = typeof body.email === "string" ? body.email : "";
   const email = rawEmail.trim().toLowerCase();
   const normalizedEmail = email;
+  if (!normalizedEmail) {
+    console.log("[magic:start] early-exit: missing email");
+    return c.json({ ok: true });
+  }
+  console.log("[magic:start] parsed email", { to: normalizedEmail });
   const forwardedFor = (c.req.header("x-forwarded-for") ?? "").split(",")[0]?.trim();
   const cfIp = c.req.header("CF-Connecting-IP");
   const ip = cfIp || forwardedFor || (c.req.raw.cf?.colo ?? "unknown");
@@ -42,6 +48,7 @@ app.post("/magic/start", async (c) => {
   if (!ipAllowed || !emailAllowed || !isValidEmail) {
     return c.json({ ok: true });
   }
+  console.log("[magic:start] passed rate limit");
 
   try {
     const code = generateNumericCode(6);
@@ -65,6 +72,7 @@ app.post("/magic/start", async (c) => {
       .bind(email, tokenHash, expiresAt, now, ip)
       .run();
 
+    console.log("[magic:start] code persisted");
     console.log("[magic:start] about to send", { to: normalizedEmail });
     try {
       const subject = "Your BUS Core Login Code";
