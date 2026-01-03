@@ -1,20 +1,12 @@
 import { Hono } from "hono";
-import { hashString, generateNumericCode, signIdentityToken } from "../services/crypto";
+import { generateNumericCode, signIdentityToken } from "../services/crypto";
 import { sendMagicEmail } from "../email/resend";
+import { hashMagicCode, timingSafeEqual } from "../lib/hash";
 import { getExpFromJwt } from "../lib/jwt";
 import { assertRateLimit } from "../lib/rate-limit";
 import type { Env } from "../index";
 
 export const app = new Hono<{ Bindings: Env }>();
-
-const constantTimeEqual = (a: string, b: string): boolean => {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
-};
 
 app.post("/magic/start", async (c) => {
   console.log("[magic:start] handler entry");
@@ -66,7 +58,7 @@ app.post("/magic/start", async (c) => {
 
   try {
     const code = generateNumericCode(6);
-    const tokenHash = await hashString(`${code}:${email}`);
+    const tokenHash = await hashMagicCode(code, email, c.env);
     const now = Math.floor(Date.now() / 1000);
     const expiresAt = now + 900;
 
@@ -135,8 +127,8 @@ app.post("/magic/verify", async (c) => {
       return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
 
-    const expectedHash = await hashString(`${code}:${email}`);
-    if (!constantTimeEqual(expectedHash, record.code_hash)) {
+    const expectedHash = await hashMagicCode(code, email, c.env);
+    if (!timingSafeEqual(expectedHash, record.code_hash)) {
       console.log("[magic:verify] mismatch", { email });
       return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
