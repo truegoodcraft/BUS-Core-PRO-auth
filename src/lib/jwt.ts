@@ -17,8 +17,7 @@ export function getExpFromJwt(jwt: string): number {
     const claims = JSON.parse(payloadJson);
     return typeof claims.exp === "number" ? claims.exp : 0;
   } catch (err) {
-    // Do NOT throw; verify must continue even if exp can’t be parsed
-    console.log("[jwt] exp decode failed; proceeding with exp=0");
+    console.log("[jwt] exp decode failed; using exp=0");
     return 0;
   }
 }

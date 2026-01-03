@@ -108,7 +108,7 @@ app.post("/magic/start", async (c) => {
 });
 
 app.post("/magic/verify", async (c) => {
-  console.log("[magic:verify] handler entry_v2");
+  console.log("[magic:verify] handler entry_v3");
   const body = await c.req.json<{ email?: string; code?: string }>().catch(() => ({}));
   const email = (body.email ?? "").trim().toLowerCase();
   const code = (body.code ?? "").trim();
@@ -122,63 +122,67 @@ app.post("/magic/verify", async (c) => {
   const tooManyVerify = await assertRateLimit(c, "magic:verify:ip", ip, 10, 15 * 60);
   if (tooManyVerify) return tooManyVerify;
 
-  try {
-    const record = await c.env.DB.prepare(
-      "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ? ORDER BY created_at DESC LIMIT 1"
-    )
-      .bind(email)
-      .first<{ code_hash: string; expires_at: number }>();
+  const record = await c.env.DB.prepare(
+    "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ? ORDER BY created_at DESC LIMIT 1"
+  )
+    .bind(email)
+    .first<{ code_hash: string; expires_at: number }>();
 
-    if (!record) {
-      console.log("[magic:verify] no_code", { email });
-      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
-    }
-
-    const now = Math.floor(Date.now() / 1000);
-    if (now > record.expires_at) {
-      console.log("[magic:verify] expired", { email, now, exp: record.expires_at });
-      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
-    }
-
-    const expectedHash = await hashMagicCode(code, email, c.env.PEPPER);
-    const match = constantTimeEqual(expectedHash, record.code_hash);
-    console.log("[magic:verify] compare", {
-      stored_8: short8(record.code_hash),
-      expected_8: short8(expectedHash),
-    });
-    if (!match) {
-      console.log("[magic:verify] mismatch", { email });
-      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
-    }
-    const identityToken = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
-    let exp = 0;
-    try {
-      exp = getExpFromJwt(identityToken);
-    } catch {
-      exp = 0;
-    }
-
-    try {
-      await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
-        .bind(email)
-        .run();
-    } catch (e) {
-      console.log("[magic:verify] cleanup_failed_nonfatal", { email });
-    }
-
-    console.log("[magic:verify] success_v2", {
-      sub: email,
-      exp,
-      token_len: identityToken.length,
-    });
-    return c.json({
-      ok: true,
-      identity_token: identityToken,
-      token: identityToken,
-      exp,
-    });
-  } catch (error) {
-    console.error("[magic:verify] internal error", error);
+  if (!record) {
+    console.log("[magic:verify] no_code", { email });
     return c.json({ ok: false, error: "invalid_or_expired" }, 401);
   }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (now > record.expires_at) {
+    console.log("[magic:verify] expired", { email, now, exp: record.expires_at });
+    return c.json({ ok: false, error: "invalid_or_expired" }, 401);
+  }
+
+  const expectedHash = await hashMagicCode(code, email, c.env.PEPPER);
+  const match = constantTimeEqual(expectedHash, record.code_hash);
+  console.log("[magic:verify] compare", {
+    stored_8: short8(record.code_hash),
+    expected_8: short8(expectedHash),
+  });
+  if (!match) {
+    console.log("[magic:verify] mismatch", { email });
+    return c.json({ ok: false, error: "invalid_or_expired" }, 401);
+  }
+
+  let identityToken = "";
+  try {
+    identityToken = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
+  } catch (e) {
+    console.log("[magic:verify] token_sign_failed", String(e));
+    return c.json({ ok: false, error: "internal_sign_failed" }, 500);
+  }
+
+  console.log("[magic:verify] about_to_decode_exp");
+  let exp = 0;
+  try {
+    exp = getExpFromJwt(identityToken);
+  } catch {
+    exp = 0;
+  }
+
+  try {
+    await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
+      .bind(email)
+      .run();
+  } catch (e) {
+    console.log("[magic:verify] cleanup_failed_nonfatal", { email });
+  }
+
+  console.log("[magic:verify] success_v3", {
+    sub: email,
+    exp,
+    token_len: identityToken.length,
+  });
+  return c.json({
+    ok: true,
+    identity_token: identityToken,
+    token: identityToken,
+    exp,
+  });
 });
