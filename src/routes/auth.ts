@@ -105,10 +105,11 @@ app.post("/magic/start", async (c) => {
 });
 
 app.post("/magic/verify", async (c) => {
+  console.log("[magic:verify] handler entry");
   const body = await c.req.json<{ email?: string; code?: string }>().catch(() => ({}));
   const rawEmail = typeof body.email === "string" ? body.email : "";
   const email = rawEmail.trim().toLowerCase();
-  const code = typeof body.code === "string" ? body.code : "";
+  const code = typeof body.code === "string" ? body.code.trim() : "";
   const ip = c.req.header("CF-Connecting-IP") ?? "0.0.0.0";
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
@@ -121,7 +122,7 @@ app.post("/magic/verify", async (c) => {
 
   try {
     const record = await c.env.DB.prepare(
-      "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ?"
+      "SELECT code_hash, expires_at FROM auth_magic_links WHERE email = ? ORDER BY created_at DESC LIMIT 1"
     )
       .bind(email)
       .first<{ code_hash: string; expires_at: number }>();
@@ -129,20 +130,20 @@ app.post("/magic/verify", async (c) => {
     const now = Math.floor(Date.now() / 1000);
     if (!record) {
       console.log("[magic:verify] no_code", { email });
-      return c.json({ ok: false, error: "invalid_or_expired" });
+      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
-    if (record.expires_at <= now) {
+    if (now > record.expires_at) {
       console.log("[magic:verify] expired", { email, exp: record.expires_at });
       await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
         .bind(email)
         .run();
-      return c.json({ ok: false, error: "invalid_or_expired" });
+      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
 
     const expectedHash = await hashString(`${code}:${email}`);
     if (!constantTimeEqual(expectedHash, record.code_hash)) {
       console.log("[magic:verify] mismatch", { email });
-      return c.json({ ok: false, error: "invalid_or_expired" });
+      return c.json({ ok: false, error: "invalid_or_expired" }, 401);
     }
 
     await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
@@ -162,6 +163,6 @@ app.post("/magic/verify", async (c) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown";
     console.warn(JSON.stringify({ event: "magic_verify_error", msg: message }));
-    return c.json({ ok: false, error: "invalid_or_expired" });
+    return c.json({ ok: false, error: "invalid_or_expired" }, 401);
   }
 });
