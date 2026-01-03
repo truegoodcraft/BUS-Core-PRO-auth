@@ -1,4 +1,4 @@
-function b64urlToB64(s: string): string {
+export function b64urlToB64(s: string): string {
   // URL-safe -> standard base64
   let b = s.replace(/-/g, "+").replace(/_/g, "/");
   // pad to length % 4 === 0

@@ -1,3 +1,5 @@
+import { b64urlToB64 } from "../lib/jwt";
+
 // Helper to safely decode PEM (handles whitespace/newlines correctly)
 const pemToDer = (pem: string): ArrayBuffer => {
   // Remove PEM headers/footers and ALL whitespace (including \r\n)
@@ -27,9 +29,7 @@ const base64urlEncodeString = (value: string): string =>
   base64urlEncode(utf8Encode(value));
 
 const base64urlDecodeToBytes = (value: string): Uint8Array => {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
-  const base64 = `${normalized}${padding}`;
+  const base64 = b64urlToB64(value);
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {

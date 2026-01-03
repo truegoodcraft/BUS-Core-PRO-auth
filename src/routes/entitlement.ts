@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import type { Env } from "../index";
+import { b64urlToB64 } from "../lib/jwt";
 import { checkRateLimit } from "../services/ratelimit";
 
 const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
@@ -25,9 +26,7 @@ const base64urlEncodeString = (value: string): string => {
 };
 
 const base64urlDecodeToBytes = (value: string): Uint8Array => {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
-  const base64 = `${normalized}${padding}`;
+  const base64 = b64urlToB64(value);
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {

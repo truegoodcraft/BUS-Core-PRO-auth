@@ -108,7 +108,7 @@ app.post("/magic/start", async (c) => {
 });
 
 app.post("/magic/verify", async (c) => {
-  console.log("[magic:verify] handler entry");
+  console.log("[magic:verify] handler entry_v2");
   const body = await c.req.json<{ email?: string; code?: string }>().catch(() => ({}));
   const email = (body.email ?? "").trim().toLowerCase();
   const code = (body.code ?? "").trim();
@@ -162,11 +162,11 @@ app.post("/magic/verify", async (c) => {
       await c.env.DB.prepare("DELETE FROM auth_magic_links WHERE email = ?")
         .bind(email)
         .run();
-    } catch (err) {
-      console.log("[magic:verify] cleanup failed (non-fatal)", { email });
+    } catch (e) {
+      console.log("[magic:verify] cleanup_failed_nonfatal", { email });
     }
 
-    console.log("[magic:verify] success", {
+    console.log("[magic:verify] success_v2", {
       sub: email,
       exp,
       token_len: identityToken.length,
