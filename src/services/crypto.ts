@@ -1,14 +1,12 @@
 const pemToDer = (pem: string): ArrayBuffer => {
-  if (!pem || typeof pem !== "string") throw new Error("missing_private_key");
-  // Nuclear strip: remove headers/footers and ANY non-base64 char
   const stripped = pem
     .replace(/-----BEGIN [^-]+-----/g, "")
     .replace(/-----END [^-]+-----/g, "")
     .replace(/[^A-Za-z0-9+/=]/g, "");
-  const bin = atob(stripped);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
-  return out.buffer;
+  const binary = atob(stripped);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
 };
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
