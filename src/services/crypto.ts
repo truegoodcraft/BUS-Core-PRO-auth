@@ -1,19 +1,21 @@
-const utf8Encode = (value: string): Uint8Array => {
-  return new TextEncoder().encode(value);
+const pemToDer = (pem: string): ArrayBuffer => {
+  if (!pem || typeof pem !== "string") throw new Error("missing_private_key");
+  // Nuclear strip: remove headers/footers and ANY non-base64 char
+  const stripped = pem
+    .replace(/-----BEGIN [^-]+-----/g, "")
+    .replace(/-----END [^-]+-----/g, "")
+    .replace(/[^A-Za-z0-9+/=]/g, "");
+  const bin = atob(stripped);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out.buffer;
 };
 
-const base64urlEncode = (bytes: Uint8Array): string => {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  const base64 = btoa(binary);
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-};
-
-const base64urlEncodeString = (value: string): string => {
-  return base64urlEncode(utf8Encode(value));
-};
+const utf8 = (s: string) => new TextEncoder().encode(s);
+const b64u = (bytes: Uint8Array) =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+const b64uStr = (s: string) =>
+  btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 
 const base64urlDecodeToBytes = (value: string): Uint8Array => {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -32,80 +34,67 @@ const base64urlDecodeToString = (value: string): string => {
   return new TextDecoder().decode(bytes);
 };
 
-const pemToDer = (pem: string): ArrayBuffer => {
-  const stripped = pem
-    .replace(/-----BEGIN [^-]+-----/g, "")
-    .replace(/-----END [^-]+-----/g, "")
-    .replace(/\s+/g, "");
-  const binary = atob(stripped);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
-};
-
-export const hashString = async (input: string): Promise<string> => {
-  const hash = await crypto.subtle.digest("SHA-256", utf8Encode(input));
-  const bytes = new Uint8Array(hash);
-  let hex = "";
-  for (const byte of bytes) {
-    hex += byte.toString(16).padStart(2, "0");
-  }
-  return hex;
-};
-
-export const generateNumericCode = (length: number = 6): string => {
-  if (length <= 0) {
-    return "";
-  }
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let code = "";
-  for (const byte of bytes) {
-    code += (byte % 10).toString();
-  }
-  return code;
-};
-
-export const signIdentityToken = async (
+export async function signIdentityToken(
   payload: { email: string },
   privateKeyPem: string
-): Promise<string> => {
+): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  const header = {
-    alg: "EdDSA",
-    typ: "JWT",
-  };
-  const body = {
-    typ: "identity",
-    sub: payload.email,
-    iss: "auth.buscore.ca",
+
+  const fullPayload = {
+    v: 1,
+    sub: payload.email.toLowerCase(),
+    aud: "bus-auth",
+    purpose: "identity",
     iat: now,
     exp: now + 7 * 24 * 60 * 60,
   };
 
-  const headerEncoded = base64urlEncodeString(JSON.stringify(header));
-  const bodyEncoded = base64urlEncodeString(JSON.stringify(body));
-  const signingInput = `${headerEncoded}.${bodyEncoded}`;
+  const header = { alg: "EdDSA", typ: "JWT" };
+  const signingInput = `${b64uStr(JSON.stringify(header))}.${b64uStr(JSON.stringify(fullPayload))}`;
 
-  const privateKey = await crypto.subtle.importKey(
+  const key = await crypto.subtle.importKey(
     "pkcs8",
     pemToDer(privateKeyPem),
     { name: "Ed25519" },
     false,
     ["sign"]
   );
+  const sig = await crypto.subtle.sign("Ed25519", key, utf8(signingInput));
+  return `${signingInput}.${b64u(new Uint8Array(sig))}`;
+}
 
-  const signature = await crypto.subtle.sign(
-    "Ed25519",
-    privateKey,
-    utf8Encode(signingInput)
-  );
+export function generateNumericCode(length: number): string {
+  let code = "";
+  for (let i = 0; i < length; i += 1) code += Math.floor(Math.random() * 10).toString();
+  return code;
+}
 
-  const signatureEncoded = base64urlEncode(new Uint8Array(signature));
-  return `${signingInput}.${signatureEncoded}`;
-};
+export async function hashString(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export const normalizeEmail = (e: string) => (e ?? "").trim().toLowerCase();
+
+export async function sha256Hex(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function constantTimeEqual(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i += 1) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
+export async function hashMagicCode(code: string, normalizedEmail: string, pepper?: string) {
+  return sha256Hex(`${code}:${normalizedEmail}:${pepper ?? ""}`);
+}
+
+export const short8 = (s: string) => (s ? s.slice(0, 8) : "");
 
 export const verifyIdentityToken = async (
   token: string,
@@ -116,11 +105,13 @@ export const verifyIdentityToken = async (
     return null;
   }
   const [headerEncoded, bodyEncoded, signatureEncoded] = parts;
-  let body: { sub?: string; iss?: string; exp?: number };
+  let body: { sub?: string; aud?: string; purpose?: string; v?: number; exp?: number };
   try {
     body = JSON.parse(base64urlDecodeToString(bodyEncoded)) as {
       sub?: string;
-      iss?: string;
+      aud?: string;
+      purpose?: string;
+      v?: number;
       exp?: number;
     };
   } catch {
@@ -131,7 +122,10 @@ export const verifyIdentityToken = async (
   if (!body.exp || now > body.exp) {
     return null;
   }
-  if (body.iss !== "auth.buscore.ca") {
+  if (body.aud !== "bus-auth" || body.purpose !== "identity" || body.v !== 1) {
+    return null;
+  }
+  if (!body.sub) {
     return null;
   }
 
@@ -149,10 +143,10 @@ export const verifyIdentityToken = async (
     "Ed25519",
     publicKey,
     signatureBytes,
-    utf8Encode(signingInput)
+    utf8(signingInput)
   );
 
-  if (!valid || !body.sub) {
+  if (!valid) {
     return null;
   }
   return body.sub;
