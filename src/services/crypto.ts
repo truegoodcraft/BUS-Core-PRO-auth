@@ -157,3 +157,16 @@ export const verifyIdentityToken = async (
   }
   return body.sub;
 };
+
+export const getExpFromJwt = (token: string): number => {
+  const [, payload] = token.split(".");
+  if (!payload) {
+    return 0;
+  }
+  try {
+    const obj = JSON.parse(base64urlDecodeToString(payload)) as { exp?: number };
+    return typeof obj.exp === "number" ? obj.exp : 0;
+  } catch {
+    return 0;
+  }
+};

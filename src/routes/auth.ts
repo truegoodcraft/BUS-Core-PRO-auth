@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { hashString, generateNumericCode } from "../services/crypto";
+import { hashString, generateNumericCode, signIdentityToken, getExpFromJwt } from "../services/crypto";
 import { sendMagicEmail } from "../email/resend";
 import { assertRateLimit } from "../lib/rate-limit";
 import type { Env } from "../index";
@@ -145,7 +145,16 @@ app.post("/magic/verify", async (c) => {
       .bind(email)
       .run();
 
-    return c.json({ ok: true });
+    const token = await signIdentityToken({ email }, c.env.IDENTITY_PRIVATE_KEY);
+    const exp = getExpFromJwt(token);
+    console.log("[magic:verify] ok", { sub: email, exp });
+
+    return c.json({
+      ok: true,
+      identity_token: token,
+      token,
+      exp,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown";
     console.warn(JSON.stringify({ event: "magic_verify_error", msg: message }));
