@@ -214,8 +214,21 @@ app.post("/checkout/session", identityAuth, async (c) => {
     return c.json({ ok: false, error: "invalid_identity" }, 401);
   }
 
+  if (!env.STRIPE_SECRET_KEY || !/^sk_(live|test)/.test(env.STRIPE_SECRET_KEY)) {
+    return c.json({ ok: false, error: "config_missing_secret" }, 500);
+  }
+  if (!env.STRIPE_PRICE_DEFAULT || !/^price_/.test(env.STRIPE_PRICE_DEFAULT)) {
+    return c.json({ ok: false, error: "config_missing_price" }, 500);
+  }
+  if (!env.CHECKOUT_SUCCESS_URL || !env.CHECKOUT_CANCEL_URL) {
+    return c.json({ ok: false, error: "config_missing_urls" }, 500);
+  }
+
   try {
-    const stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" });
+    const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
+      apiVersion: "2023-10-16",
+      httpClient: Stripe.createFetchHttpClient(),
+    });
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       success_url: env.CHECKOUT_SUCCESS_URL,
@@ -228,10 +241,30 @@ app.post("/checkout/session", identityAuth, async (c) => {
       return c.json({ ok: false, error: "stripe_error" }, 500);
     }
     return c.json({ ok: true, url: session.url });
-  } catch (err) {
-    console.error("checkout_session_error", err);
-    return c.json({ ok: false, error: "stripe_error" }, 500);
+  } catch (err: any) {
+    const detail = { type: err?.type, code: err?.code, message: err?.message };
+    console.error("checkout_session_error", detail);
+    const debug = c.req.header("x-debug") === "1";
+    return c.json(
+      debug ? { ok: false, error: "stripe_error", detail } : { ok: false, error: "stripe_error" },
+      500
+    );
   }
+});
+
+app.get("/_health/checkout", (c) => {
+  const env = c.env as Env;
+  return c.json({
+    ok: true,
+    hasSecret: !!env.STRIPE_SECRET_KEY,
+    secretMode: env.STRIPE_SECRET_KEY?.startsWith("sk_live")
+      ? "live"
+      : env.STRIPE_SECRET_KEY?.startsWith("sk_test")
+        ? "test"
+        : "unknown",
+    hasPrice: !!env.STRIPE_PRICE_DEFAULT,
+    hasUrls: !!env.CHECKOUT_SUCCESS_URL && !!env.CHECKOUT_CANCEL_URL,
+  });
 });
 
 app.post("/stripe/webhook", async (c) => {

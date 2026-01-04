@@ -1,0 +1,19 @@
+{
+  "name": "bus-core-pro-auth",
+  "version": "1.0.0",
+  "description": "🚀 **Status:** Production Ready 🛡️ **Service Role:** Identity + Entitlement Authority",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "stripe": "^16.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240924.0"
+  }
+}
