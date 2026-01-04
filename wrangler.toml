@@ -1,44 +1,31 @@
 name = "bus-auth"
 main = "src/index.ts"
 compatibility_date = "2025-12-01"
-workers_dev = true
-
-
+workers_dev = false
 
 [vars]
-ADMIN_IP_ALLOWLIST = "142.90.207.149"
-ENVIRONMENT = "dev"
-ELIGIBLE_PRICE_IDS = "price_1SifxXBAvVMaiDTdz1QF6BM1"
+# Move actual values to Cloudflare Dashboard Variables
+ADMIN_IP_ALLOWLIST = "0.0.0.0"
+ENVIRONMENT = "production"
+ELIGIBLE_PRICE_IDS = "price_your_id_here"
 CHECKOUT_SUCCESS_URL = "https://buscore.ca/success"
 CHECKOUT_CANCEL_URL = "https://buscore.ca/cancel"
 EMAIL_FROM = "BUS Core Auth <auth@buscore.ca>"
-# ADDED: Default price ID so empty {} bodies work
-STRIPE_PRICE_DEFAULT = "price_1SifxXBAvVMaiDTdz1QF6BM1"
+STRIPE_PRICE_DEFAULT = "price_your_id_here"
 
-IDENTITY_PUBLIC_KEY = """
------BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAw/4DTTF4yocIGs3lVi08STiFHPLZH+9lK5DLSQTpHBA=
------END PUBLIC KEY-----
-"""
+# Public keys should be managed as Environment Variables in the dashboard
+IDENTITY_PUBLIC_KEY = ""
+ENTITLEMENT_PUBLIC_KEY = ""
 
-ENTITLEMENT_PUBLIC_KEY = """
------BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAHlW/+vHVPT4b4YJ1Tv2yJCmpV74AV+9oh6pCT3gtlPY=
------END PUBLIC KEY-----
-"""
-
-# Keep logs enabled so you can debug in Cloudflare dashboard
 [observability.logs]
 enabled = true
 
 [[d1_databases]]
 binding = "DB"
 database_name = "bus-auth-db"
-database_id = "c4120c73-2d08-4e87-8e4c-e402cfbb4f05"
-
-
+database_id = "your-database-id-here"
 
 [[kv_namespaces]]
 binding = "RATE_LIMITS"
-id = "faae0e26a10744e98aee473e3186b0dd"
-preview_id = "faae0e26a10744e98aee473e3186b0dd"
+id = "your-kv-id-here"
+preview_id = "your-kv-preview-id-here"
