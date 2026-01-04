@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import Stripe from "stripe";
 import { app as authRouter } from "./routes/auth";
+import { identityAuth } from "./middleware/identityAuth";
 import { sendMagicEmail } from "./email/resend";
 import { entitlementTokenHandler } from "./routes/entitlement";
 import { verifyIdentityToken } from "./services/crypto";
@@ -200,36 +201,36 @@ app.post("/billing/create-checkout-session", async (c) => {
   }
 });
 
-app.post("/checkout/session", async (c) => {
-  const authHeader = c.req.header("Authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) return c.json({ ok: false, error: "missing_bearer" }, 401);
-  const token = authHeader.slice(7).trim();
-  const email = await verifyIdentityToken(token, c.env.IDENTITY_PUBLIC_KEY);
-  if (!email) return c.json({ ok: false, error: "invalid_token" }, 401);
+app.post("/checkout/session", identityAuth, async (c) => {
+  const env = c.env as {
+    STRIPE_SECRET_KEY: string;
+    STRIPE_PRICE_DEFAULT: string;
+    CHECKOUT_SUCCESS_URL: string;
+    CHECKOUT_CANCEL_URL: string;
+  };
 
-  if (!c.env.STRIPE_SECRET_KEY || !c.env.CHECKOUT_SUCCESS_URL || !c.env.CHECKOUT_CANCEL_URL) 
-    return c.json({ ok: false, error: "env_misconfigured" }, 500);
-
-  let body: any = {};
-  try { body = await c.req.json(); } catch (e) {}
-  const priceId = body.price_id || c.env.STRIPE_PRICE_DEFAULT;
-  const eligiblePrices = parseEligiblePriceIds(c.env);
-  
-  if (!priceId || !eligiblePrices.includes(priceId)) return c.json({ ok: false, error: "invalid_price_id" }, 400);
+  const email = c.get("tokenSubject") as string | undefined;
+  if (!email) {
+    return c.json({ ok: false, error: "invalid_identity" }, 401);
+  }
 
   try {
-    const stripe = getStripe(c.env);
+    const stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" });
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
+      success_url: env.CHECKOUT_SUCCESS_URL,
+      cancel_url: env.CHECKOUT_CANCEL_URL,
+      line_items: [{ price: env.STRIPE_PRICE_DEFAULT, quantity: 1 }],
       customer_email: email,
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: c.env.CHECKOUT_SUCCESS_URL,
-      cancel_url: c.env.CHECKOUT_CANCEL_URL,
-      metadata: { email }
+      allow_promotion_codes: true,
     });
+    if (!session.url) {
+      return c.json({ ok: false, error: "stripe_error" }, 500);
+    }
     return c.json({ ok: true, url: session.url });
-  } catch (err: any) {
-    return c.json({ ok: false, error: "stripe_error", details: err.message }, 400);
+  } catch (err) {
+    console.error("checkout_session_error", err);
+    return c.json({ ok: false, error: "stripe_error" }, 500);
   }
 });
 
