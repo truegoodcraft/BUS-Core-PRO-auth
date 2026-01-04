@@ -1,88 +1,121 @@
-# BUS Auth Cloudflare Worker (bus-auth)
+# 🔐 BUS Core Auth (`bus-auth`) 🔐
 
-This repo contains the Cloudflare Worker for **bus-auth** (custom domain `auth.buscore.ca`).
+🚀 **Status:** Production Ready 🛡️ **Service Role:** Identity + Entitlement Authority 
 
-## Deploy
+---
 
-`wrangler deploy` uploads the Worker to Cloudflare and publishes it to your account and routes.
+### ✨ 1. Overview ✨
 
-## Required secrets (Cloudflare)
+`bus-auth` is the central gateway for **BUS Core Pro**. It operates on the philosophy of **"Gate Key, Not Hall Monitor"**. The service is responsible for:
 
-Set these as **secrets** (case-sensitive):
+* 🆔 **Identity:** Issuing tokens that prove email ownership.
 
-- `ADMIN_API_KEY`
-- `STRIPE_SECRET_KEY`
-- `STRIPE_WEBHOOK_SECRET`
 
-Example:
+* 🎟️ **Entitlements:** Verifying subscription status via Stripe and issuing signed entitlement tokens.
 
-```bash
-npx wrangler secret put ADMIN_API_KEY
-npx wrangler secret put STRIPE_SECRET_KEY
-npx wrangler secret put STRIPE_WEBHOOK_SECRET
-```
 
-## Required vars
+* ⏳ **Persistence:** Clients are encouraged to trust token expiry (`exp`) for offline grace periods.
 
-Set these as plaintext vars (in `wrangler.toml` or `wrangler vars`):
 
-- `ADMIN_IP_ALLOWLIST`
-- `ELIGIBLE_PRICE_IDS`
-- `CHECKOUT_SUCCESS_URL`
-- `CHECKOUT_CANCEL_URL`
 
-## Local dev
+---
 
-```bash
-npx wrangler dev --local --port 8788
-```
+### 🛠️ 2. Technology Stack 🛠️
 
-## Bootstrap the D1 database
+* ⚡ **Runtime:** Cloudflare Workers 
 
-Create the `entitlements` table and indexes by calling the admin-only endpoint:
 
-```
-POST /admin/db/bootstrap
-```
+* 🔥 **Framework:** Hono (TypeScript) 
 
-This must be called from an allowlisted IP with `Authorization: Bearer <ADMIN_API_KEY>`.
 
-## Stripe webhook
+* 🗄️ **Database:** Cloudflare D1 
 
-Set the Stripe webhook endpoint to:
 
-```
-https://auth.buscore.ca/stripe/webhook
-```
+* ⚡ **Cache:** Cloudflare KV 
 
-The webhook handler requires the **raw request body** for signature verification; do not parse JSON before verification.
 
-## Firewall rule snippet (free plan)
+* 💳 **Billing:** Stripe (Checkout + Webhooks) 
 
-Use a rule that matches `/admin/*` paths. Example expression:
 
-```
-(http.request.uri.path contains "/admin/")
-```
+* ✍️ **Signing:** Ed25519 Asymmetric Signing 
 
-## Entitlement Tokens (Ed25519)
 
-Entitlement tokens let clients cache proof of eligibility for offline verification with a **7-day grace period** after subscription ends. Stripe + D1 remain the source of truth; tokens are derived outputs only.
 
-### Required Cloudflare config
+---
 
-- Secret: `ENTITLEMENT_PRIVATE_KEY` (Ed25519 PKCS8 PEM, contains `BEGIN PRIVATE KEY`)
-- Var: `ENTITLEMENT_PUBLIC_KEY` (Ed25519 SPKI PEM, contains `BEGIN PUBLIC KEY`)
-- Optional vars:
-  - `ENTITLEMENT_GRACE_SECONDS`
-  - `ENTITLEMENT_MAX_TTL_SECONDS`
+### 📡 3. API Reference 📡
 
-### Endpoints
+#### 🌐 Public Endpoints
 
-- `POST /entitlement/token` with JSON `{ "email": "user@example.com" }`
-- `GET /.well-known/entitlement-public-key` to fetch the public key for clients
+| Method | Path | Purpose |
+| --- | --- | --- |
+| 🏥 `GET` | `/health` | Service health check 
 
-### Security notes
+ |
+| 🪄 `POST` | `/auth/magic/start` | Trigger a 6-digit magic code email 
 
-- The private key never lives in git or on the client.
-- Clients verify the token signature and `exp` locally.
+ |
+| ✅ `POST` | `/auth/magic/verify` | Exchange code for an Identity Token 
+
+ |
+| 🔍 `POST` | `/entitlement` | Public eligibility check 
+
+ |
+| 🔑 `GET` | `/.well-known/identity-public-key` | Verification key for Identity Tokens 
+
+ |
+| 🔑 `GET` | `/.well-known/entitlement-public-key` | Verification key for Entitlement Tokens 
+
+ |
+
+#### 🔒 Authenticated Endpoints
+
+*Requires a valid Bearer Identity Token* 
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| 💎 `POST` | `/entitlement/token` | Mint a signed Entitlement Token 
+
+ |
+| 🛒 `POST` | `/checkout/session` | Create a Stripe Checkout session 
+
+ |
+
+---
+
+### 🛡️ 4. Security & Authentication 🛡️
+
+* 🔢 **Magic Codes:** 6-digit numeric codes with a 15-minute expiry.
+
+
+* ⏱️ **Token TTL:** Identity tokens are valid for 7 days.
+
+
+* 🗓️ **Entitlement Grace:** Tokens include a built-in 7-day grace period beyond the `current_period_end` to handle intermittent connectivity.
+
+
+* 🖊️ **Verification:** All tokens are signed using Ed25519.
+
+
+
+---
+
+### 🚀 5. Development & Deployment 🚀
+
+#### ⚙️ Required Environment Variables (`wrangler.toml`)
+
+Ensure the following variables are defined in your environment:
+
+* 📧 `EMAIL_FROM`: The sender address for magic links.
+* 🔗 `CHECKOUT_SUCCESS_URL` / `CHECKOUT_CANCEL_URL`: Stripe redirect paths.
+* 🔑 `IDENTITY_PUBLIC_KEY` / `ENTITLEMENT_PUBLIC_KEY`: The public half of your Ed25519 pairs.
+
+#### 🤐 Secrets Management
+
+The following secrets must be set via `wrangler secret put`:
+
+* 🗝️ `IDENTITY_PRIVATE_KEY` / `ENTITLEMENT_PRIVATE_KEY`
+* 💳 `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`
+* ✉️ `RESEND_API_KEY`
+* 👔 `ADMIN_API_KEY`
+
