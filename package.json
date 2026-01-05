@@ -1,0 +1,17 @@
+{
+  "name": "bus-auth-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "stripe": "KEEP_EXISTING"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "KEEP_EXISTING",
+    "wrangler": "KEEP_EXISTING"
+  }
+}
