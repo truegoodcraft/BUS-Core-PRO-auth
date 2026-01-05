@@ -183,18 +183,15 @@ export const entitlementTokenHandler = async (c: Context<{ Bindings: Env }>) => 
 
   try {
     const row = await c.env.DB.prepare(
-      "SELECT status, price_id, current_period_end FROM entitlements WHERE email = ?"
+      "SELECT status, entitled, trial_end, current_period_end FROM entitlements WHERE email = ?"
     )
       .bind(email)
-      .first<{ status: string | null; price_id: string | null; current_period_end: number | null }>();
+      .first<{ status: string | null; entitled: number | null; trial_end: number | null; current_period_end: number | null }>();
 
     const status = row?.status ?? "none";
-    const priceId = row?.price_id ?? null;
     const currentPeriodEnd = row?.current_period_end ?? null;
     const now = Math.floor(Date.now() / 1000);
-    const isActiveStatus = status === "active" || status === "trialing";
-    const isWithinPeriod = currentPeriodEnd ? currentPeriodEnd > now : true;
-    const eligible = isActiveStatus && isWithinPeriod;
+    const eligible = row?.entitled === 1;
     if (!eligible) {
       if (c.env.ENVIRONMENT !== "prod") {
         console.log(JSON.stringify({ event: "entitlement_denied", email, status }));
@@ -212,14 +209,14 @@ export const entitlementTokenHandler = async (c: Context<{ Bindings: Env }>) => 
       exp,
       eligible,
       status,
-      price_id: priceId,
+      price_id: null,
       current_period_end: currentPeriodEnd,
     };
 
     const token = await signEntitlementJwt(payload, c.env.ENTITLEMENT_PRIVATE_KEY);
 
     if (row) {
-      await c.env.DB.prepare("UPDATE entitlements SET last_token_mint = ? WHERE email = ?")
+      await c.env.DB.prepare("UPDATE entitlements SET updated_at = ? WHERE email = ?")
         .bind(now, email)
         .run();
     }
