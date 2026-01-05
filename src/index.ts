@@ -15,6 +15,7 @@ export type Env = {
   STRIPE_PRICE_DEFAULT?: string;
   CHECKOUT_SUCCESS_URL: string;
   CHECKOUT_CANCEL_URL: string;
+  TRIAL_DAYS?: string;
   ENTITLEMENT_PRIVATE_KEY: string;
   ENTITLEMENT_PUBLIC_KEY: string;
   ENTITLEMENT_GRACE_SECONDS?: string;
@@ -207,6 +208,7 @@ app.post("/checkout/session", identityAuth, async (c) => {
     STRIPE_PRICE_DEFAULT: string;
     CHECKOUT_SUCCESS_URL: string;
     CHECKOUT_CANCEL_URL: string;
+    TRIAL_DAYS?: string;
   };
 
   const email = c.get("tokenSubject") as string | undefined;
@@ -223,6 +225,10 @@ app.post("/checkout/session", identityAuth, async (c) => {
   if (!env.CHECKOUT_SUCCESS_URL || !env.CHECKOUT_CANCEL_URL) {
     return c.json({ ok: false, error: "config_missing_urls" }, 500);
   }
+  const trialDays = Number(env.TRIAL_DAYS ?? 14);
+  if (!(trialDays > 0 && Number.isFinite(trialDays))) {
+    return c.json({ ok: false, error: "config_invalid_trial" }, 500);
+  }
 
   try {
     const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
@@ -236,6 +242,7 @@ app.post("/checkout/session", identityAuth, async (c) => {
       line_items: [{ price: env.STRIPE_PRICE_DEFAULT, quantity: 1 }],
       customer_email: email,
       allow_promotion_codes: true,
+      subscription_data: { trial_period_days: trialDays },
     });
     if (!session.url) {
       return c.json({ ok: false, error: "stripe_error" }, 500);
@@ -264,6 +271,7 @@ app.get("/_health/checkout", (c) => {
         : "unknown",
     hasPrice: !!env.STRIPE_PRICE_DEFAULT,
     hasUrls: !!env.CHECKOUT_SUCCESS_URL && !!env.CHECKOUT_CANCEL_URL,
+    trialMode: `explicit:${Number(env.TRIAL_DAYS ?? 14)}`,
   });
 });
 
