@@ -1,19 +1,17 @@
 {
-  "name": "bus-core-pro-auth",
-  "version": "1.0.0",
-  "description": "🚀 **Status:** Production Ready 🛡️ **Service Role:** Identity + Entitlement Authority",
-  "main": "index.js",
+  "name": "bus-auth-worker",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "stripe": "^16.0.0"
+    "hono": "^4.0.0",
+    "stripe": "KEEP_EXISTING"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240924.0"
+    "@cloudflare/workers-types": "KEEP_EXISTING",
+    "wrangler": "KEEP_EXISTING"
   }
 }
